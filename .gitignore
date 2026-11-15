@@ -1,0 +1,12 @@
+out/
+cache/
+broadcast/
+.env
+.idea/
+.vscode/
+lcov.info
+coverage/
+
+# Local Foundry key material. Never commit.
+keystore/
+*.secret
