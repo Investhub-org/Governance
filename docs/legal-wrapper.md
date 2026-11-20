@@ -21,7 +21,9 @@ The intended wrapper, which counsel has to write in a form the register and a no
 - `Governor`. The same shape as the governor's counter: For + Abstain meets the class quorum, and For is strictly greater than Against. The basis points are the class rule, not the governor contract's single percent numerator.
 - `Both`. Both formulas have to succeed.
 
-`GvGovernor` is unchanged. It is the execution gate Tally indexes, with one quorum numerator for every proposal. It does not read the rules. A proposal can reach `Executed` there while `passed` is false. The binding mode records which check the articles adopt. It does not stop the timelock. A statute change that must be stricter than the governor's single quorum should be treated as passed only when `articlesOutcome` says `passed`.
+`GvGovernor` keeps the shape Tally indexes: one quorum numerator, Bravo counting, and no copy of the articles formula. Its deployed runtime is 17,915 bytes. Before the timelock runs, `_executeOperations` calls `GvAssembly.assertExecutable`. That calls `canonicalOutcome` for the proposal's execution class. Articles and Both revert unless `passed` is true. Governor mode returns without that check, so the governor's own vote is enough. `state()` can still say Succeeded or Queued when the articles check would fail. The transaction that would execute it reverts.
+
+The issuer sets `articlesGate` once, to the meeting contract. After that only the timelock can replace it, and the replacement is checked by the gate already stored. A proposal that was never bound to an agenda item is checked as qualified. Binding it records the class, and a later binding can only make that class stricter. The governor still has one numerator for every class. A statute change that must be stricter than that numerator has to be bound as qualified, and it executes only when `passed` is true.
 
 ## Placeholders
 
@@ -36,7 +38,7 @@ The unclaimed-drag window cannot be set below 180 days or above 1,825 days. Thos
 `GvAssembly` records an AGM or an EGM.
 
 - A director can convene while `directorCount` is at least `requiredDirectors()`. If a capital band has raised the floor and the board is short, the board cannot convene. Shareholders still can, which is how a short board gets a meeting that can appoint directors.
-- One holder can convene when their current balance meets `meetingCallThresholdBps` of supply, rounding the threshold up. That path reads the live balance. One balance cannot be pledged twice. A flash loan of tokens can still meet it if transfers are open.
+- One holder can convene when their voting power at the previous second meets `meetingCallThresholdBps` of the past total supply, rounding the threshold up. A transfer or a flash loan in the current second is not counted. Undelegated shares weigh zero on this path as well.
 - Holders under that fraction file a request. Support is each supporter's ERC-20 Votes weight at the second before the request was filed, added once into a running tally. There is no cap on the number of supporters. A transfer after the snapshot does not drop the original supporter and does not count for the recipient. Undelegated shares weigh zero, so they count as absent. The initiator is not counted until they support.
 - The notice period is copied onto the meeting. A later change to the rules does not shorten a notice already given. `openMeeting` reverts until `noticeDeadline`.
 - The agenda is stored on-chain: a short title, a document hash, and a resolution class. The invitation is a `bytes32` hash plus an optional CID of at most 128 bytes.
@@ -73,9 +75,9 @@ The terms owner can freeze a transfer by taking someone off the whitelist or by 
 
 Once that sum was reached before the deadline and `executeDrag` has run, the offer is final. Transfers of the token stay frozen until the buyer holds the whole supply. Anyone may `claimDrag` for a holder. The currency is credited to that holder, pro rata at the offer price, and the shares move to the stored buyer. `pushDrag` does the same for at most 32 holders in one call, for a small cap table. There is no function that sends the shares to an address the caller chooses.
 
-After `unclaimedWindow` (placeholder 365 days, and not on the deadline second itself), `redirectUnclaimed` credits a holder's unpaid consideration to `unclaimedRecipient` and still moves the shares to the buyer. The caller cannot pick a different recipient. If the recipient is unset, the redirect reverts and the holder can keep claiming. If the quorum is missed, or it was met and then the buyer's live balance falls below it before execution, the buyer can cancel and acceptors reclaim their shares. Peer transfers are paused from the moment the offer is posted.
+After `unclaimedWindow` (placeholder 365 days, and not on the deadline second itself), `redirectUnclaimed` credits a holder's unpaid consideration to `unclaimedRecipient` and still moves the shares to the buyer. The caller cannot pick a different recipient. If the recipient is unset, the redirect reverts and the holder can keep claiming. If the quorum is missed, the buyer can cancel and acceptors reclaim their shares. Peer transfers are paused from the moment the offer is posted, and a recovery cannot move shares during that pause, so the buyer's live balance cannot be pulled down by a recovery in order to miss a quorum that was already met.
 
-`moduleTransfer` on the share token only succeeds when the module has armed that exact transfer, and only the timelock can add a module. A bound recovery module can still move shares during a drag, because that path skips the transfer policy. Moving shares onto the buyer does not raise the snapshot. Moving them off the buyer can drop the quorum before execution.
+`moduleTransfer` on the share token only succeeds when the module has armed that exact transfer, and only the timelock can add a module. `executeRecovery` reverts while `dragUnsettled` is true. That window starts when the drag is posted and ends when the drag is cancelled or the buyer holds every share and the acquisition contract holds none. A recovery therefore cannot move shares onto the buyer or off the buyer during the freeze, and it cannot change who can claim. The snapshot cap on `buyerHeldAtPost` stays in the quorum math. The recovery path can no longer reach it while the drag is open. An open tag sale does not set `dragUnsettled`. A recovery can still move shares during a tag.
 
 **Tag.** A sale at or above the threshold escrows the price of the seller's stake plus the maximum other holders could join. The join cap is the same fraction of each other holding that the seller is selling of their own holding. The sale can settle only after the window. Joining is a right, not a duty. Settlement without joiners is allowed once the window has run.
 
@@ -90,6 +92,7 @@ The drag path can move locked shares. The tag path and pre-emption cannot. Wheth
 - The amount `0` means "whatever that address holds at execution." Any other amount is exact.
 - A board-resolution recipient must be whitelisted and must have accepted the current SHA. A court-order recipient need not be.
 - Execution needs `recoverySignatures` director signatures. The placeholder is 1. Raising it does not create a legal board; it is a parameter.
+- Execution reverts while a drag is unsettled. The proposal can still be signed and can still be cancelled. It can be executed after the drag is cancelled or the shares have all reached the buyer. A court-order recovery is under the same freeze.
 
 The contract does not check that the hash matches a real court file. The delay, the events (`RecoveryProposed`, `RecoveryExecuted`, `RecoveryCancelled`), and the timelock cancel are the on-chain limits. They are not a finding that a court would treat the hash as an order. A compromised issuer key that still owns the assembly can appoint a director and, after the delay, propose a court-order recovery. Transfer assembly ownership to the timelock if that key should not have that power. Even then, a director who already sits can propose, and holders have the delay in which to put a cancel through the timelock.
 
@@ -130,7 +133,7 @@ Their README says some files (the `EIP7702` folder, interfaces, `ERC20Flaggable`
 | Recovery | Holder-initiated claim, long delay, the holder can veto, the issuer can cancel. Their note cites a Swiss waiting-period analogy. | A director proposes. The call carries a hash of a board resolution or of a court order. Delay cannot be zero. The holder can cancel a board resolution only. | Their recovery code is BUSL. The path here is the one requested: board or court hash, events, delay, and no general admin transfer. |
 | Allowlist | `ERC20Allowlistable` (BUSL). | Boolean whitelist on `GvShareTerms`, set by the terms owner. | Reimplemented. |
 | Factory | Their factory. | `GvKitFactory` unchanged. The new modules are deployed by the issuer and wired by the timelock. | Their factory is not used. InvestHub still has no role. |
-| Meeting | Not part of their share contracts. | OpenZeppelin governor, unchanged, plus `GvAssembly`. | The ballot stays the wizard-shaped governor. |
+| Meeting | Not part of their share contracts. | OpenZeppelin governor plus `GvAssembly`. Execution calls `assertExecutable` before the timelock. | The ballot stays the wizard-shaped governor. The articles check is the extra call. |
 
 ## Open questions for Liechtenstein counsel
 
@@ -146,7 +149,7 @@ Their README says some files (the `EIP7702` folder, interfaces, `ERC20Flaggable`
 10. Is the recovery delay long enough, and is an unverified keccak256 of a PDF an acceptable commitment to a board resolution or a court order? Who may cancel a court-order path?
 11. Should `GvCompanyRules`, `GvAssembly`, and `GvShareTerms` be owned by the timelock from the first day, so the issuer key cannot retune quorums, directors, or the whitelist?
 12. Do the information-request and publication windows match the company's Auskunftspflichten, and is a hash of ciphertext enough to perform them?
-13. `bindingMode` defaults to `Articles`. `Governor` uses the governor's counting shape at the class basis points. `Both` requires both formulas. The governor contract can still execute a proposal the articles do not treat as passed. Which mode does this company adopt, and should the governor's percent numerator be set beside the class basis points?
+13. `bindingMode` defaults to `Articles`. `Governor` uses the governor's counting shape at the class basis points and is the only mode that lets the timelock run when the articles formula fails. `Both` requires both formulas and refuses execution otherwise. Which mode does this company adopt, and should the governor's percent numerator be set beside the class basis points?
 14. Undelegated shares do not show up in the governor's vote weights. Do the articles count them as absent?
 15. The Aktienbuch, tax, and stamp duty stay off-chain. Who writes the register entry after a transfer, a drag, or a recovery?
 

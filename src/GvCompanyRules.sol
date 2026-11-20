@@ -19,10 +19,9 @@ import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
  * {canonicalOutcome} is the one function the articles reference. {GvAssembly.articlesOutcome} calls it
  * and does not keep a second copy of the formula. {BindingMode} selects which formula `passed` uses.
  *
- * {GvGovernor} is a different contract and is left unchanged. It is the execution gate Tally indexes,
- * with one quorum numerator for every proposal, counting For and Abstain. It does not read this store.
- * A proposal can execute there while `passed` here is false. Setting the mode to {BindingMode.Both}
- * makes the articles require both formulas. It still does not stop the governor from executing.
+ * {GvGovernor} keeps one quorum numerator and the counting shape Tally indexes. It does not copy this
+ * formula. Before the timelock runs, it asks the meeting contract, which calls {canonicalOutcome}.
+ * Articles and Both refuse execution when `passed` is false. Governor mode does not add that check.
  */
 contract GvCompanyRules is Ownable {
     enum ResolutionClass {
@@ -120,7 +119,7 @@ contract GvCompanyRules is Ownable {
     uint64 public responseWindow;
     uint64 public recoveryDelay;
     uint16 public recoverySignatures;
-    /// @notice Default is {BindingMode.Articles}. The governor contract does not read this.
+    /// @notice Default is {BindingMode.Articles}. The governor reads it through the meeting contract at execution.
     BindingMode public bindingMode;
     /// @notice Wait after a drag is final before unclaimed consideration can be redirected.
     uint64 public unclaimedWindow;

@@ -129,7 +129,7 @@ contract GvAcquisitionTest is Test {
         assertEq(acquisition.proceeds(bob, address(usdc)), 25 * PRICE);
     }
 
-    function test_recovery_onto_the_buyer_does_not_raise_the_snapshot() public {
+    function test_recovery_cannot_move_shares_onto_the_buyer_during_a_drag() public {
         _give(buyer, 40);
         _give(alice, 30);
         _give(bob, 30);
@@ -137,24 +137,28 @@ contract GvAcquisitionTest is Test {
         _fund(buyer, address(acquisition), 100 * PRICE);
         vm.prank(buyer);
         uint256 id = acquisition.postDrag(PRICE, uint64(block.timestamp) + 90 days, 7500);
+        assertTrue(acquisition.dragUnsettled());
 
         vm.prank(director);
         uint256 recoveryId = recovery.proposeRecovery(alice, buyer, 30, keccak256("inflate"), false);
         vm.warp(recovery.recovery(recoveryId).executeAfter);
+        vm.expectPartialRevert(GvRecovery.DragUnsettled.selector);
         recovery.executeRecovery(recoveryId);
 
         (uint256 counted,, uint256 buyerCounted_) = acquisition.dragQuorumProgress(id);
-        assertEq(share.balanceOf(buyer), 70);
+        assertEq(share.balanceOf(buyer), 40);
+        assertEq(share.balanceOf(alice), 30);
         assertEq(buyerCounted_, 40);
         assertEq(counted, 40);
-        vm.expectPartialRevert(GvAcquisition.QuorumNotReached.selector);
-        acquisition.executeDrag(id);
         vm.prank(buyer);
         acquisition.cancelDrag(id);
-        assertTrue(acquisition.drag(id).cancelled);
+        assertFalse(acquisition.dragUnsettled());
+        recovery.executeRecovery(recoveryId);
+        assertEq(share.balanceOf(buyer), 70);
+        assertEq(share.balanceOf(alice), 0);
     }
 
-    function test_losing_shares_after_post_drops_the_buyer_out_of_quorum() public {
+    function test_recovery_cannot_move_shares_off_the_buyer_during_a_drag() public {
         _give(buyer, 80);
         _give(alice, 20);
         _arm();
@@ -162,23 +166,31 @@ contract GvAcquisitionTest is Test {
         vm.prank(buyer);
         uint256 id = acquisition.postDrag(PRICE, uint64(block.timestamp) + 90 days, 7500);
         assertGt(acquisition.drag(id).quorumReachedAt, 0);
-        vm.prank(buyer);
-        vm.expectPartialRevert(GvAcquisition.QuorumAlreadyReached.selector);
-        acquisition.cancelDrag(id);
 
+        vm.prank(director);
+        uint256 courtId = recovery.proposeRecovery(buyer, stranger, 1, keccak256("court-during-drag"), true);
         vm.prank(director);
         uint256 recoveryId = recovery.proposeRecovery(buyer, alice, 60, keccak256("deflate"), false);
         vm.warp(recovery.recovery(recoveryId).executeAfter);
+        vm.expectPartialRevert(GvRecovery.DragUnsettled.selector);
+        recovery.executeRecovery(courtId);
+        vm.expectPartialRevert(GvRecovery.DragUnsettled.selector);
         recovery.executeRecovery(recoveryId);
-        (uint256 counted,, uint256 buyerCounted_) = acquisition.dragQuorumProgress(id);
-        assertEq(share.balanceOf(buyer), 20);
-        assertEq(buyerCounted_, 20);
-        assertEq(counted, 20);
-        vm.expectPartialRevert(GvAcquisition.QuorumNotReached.selector);
-        acquisition.executeDrag(id);
         vm.prank(buyer);
+        vm.expectPartialRevert(GvAcquisition.QuorumAlreadyReached.selector);
         acquisition.cancelDrag(id);
-        assertTrue(acquisition.drag(id).cancelled);
+        assertEq(share.balanceOf(buyer), 80);
+
+        acquisition.executeDrag(id);
+        vm.expectPartialRevert(GvRecovery.DragUnsettled.selector);
+        recovery.executeRecovery(recoveryId);
+        acquisition.claimDrag(id, alice);
+        assertFalse(acquisition.dragUnsettled());
+        recovery.executeRecovery(recoveryId);
+        assertEq(share.balanceOf(buyer), 40);
+        assertEq(share.balanceOf(alice), 60);
+        vm.prank(director);
+        recovery.cancelRecovery(courtId);
     }
 
     function test_unclaimed_drag_proceeds_redirect_after_the_window() public {

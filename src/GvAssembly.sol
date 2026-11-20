@@ -19,12 +19,11 @@ import { GvGovernor } from "./GvGovernor.sol";
  * register, which stays off-chain.
  *
  * Who may convene comes from {GvCompanyRules}: a director, while the board meets the configured minimum,
- * or one shareholder whose current balance meets the configured fraction of supply. Holders below that
- * fraction file a request. Support on a request is each supporter's ERC-20 Votes weight at the second
- * before the request was filed, added once into a running tally. There is no supporter cap. A transfer
- * after that snapshot cannot be counted twice: the recipient's past votes do not include those shares,
- * and the sender can support only once. Undelegated shares weigh zero on this path. The single-holder
- * path still reads the live balance, because one balance cannot be pledged twice.
+ * or one shareholder whose voting power at the previous second meets the configured fraction of the
+ * past total supply. A transfer or a flash loan in the current second is not counted. Undelegated
+ * shares weigh zero. Holders below that fraction file a request. Support on a request is each
+ * supporter's ERC-20 Votes weight at the second before the request was filed, added once into a running
+ * tally. There is no supporter cap. A transfer after that snapshot cannot be counted twice.
  *
  * The notice period is stored on the meeting when it is convened. A later change to the rules does not
  * shorten a notice that was already given. The meeting cannot be opened before that deadline.
@@ -89,6 +88,8 @@ contract GvAssembly is Ownable {
     mapping(uint256 requestId => ConveningRequest) private _requests;
     mapping(uint256 requestId => AgendaItem[]) private _requestAgenda;
     mapping(uint256 requestId => mapping(address account => bool)) public hasSupported;
+    /// @dev 0 means the proposal was never bound. 1 is ordinary. 2 is qualified. Execution uses the highest.
+    mapping(uint256 proposalId => uint8 rank) public strictestClassRank;
 
     error ZeroAddress();
     error TokenMismatch();
@@ -115,6 +116,7 @@ contract GvAssembly is Ownable {
     error ProposalAlreadyBound(uint256 meetingId, uint256 index);
     error NotHolder(address caller);
     error NotConvener(address caller);
+    error ArticlesNotPassed(uint256 proposalId);
 
     event DirectorSet(address indexed account, bool allowed, uint256 directorCount);
     event MeetingConvened(
@@ -152,6 +154,7 @@ contract GvAssembly is Ownable {
         uint256 indexed proposalId,
         GvCompanyRules.ResolutionClass class
     );
+    event ShareholderConvened(address indexed account, uint48 voteSnapshot, uint256 weight, uint256 supply);
 
     constructor(address issuer, IERC20 token_, GvCompanyRules rules_, GvGovernor governor_) Ownable(issuer) {
         if (address(token_) == address(0) || address(rules_) == address(0) || address(governor_) == address(0)) {
@@ -226,11 +229,14 @@ contract GvAssembly is Ownable {
         string calldata invitationCid,
         AgendaItem[] calldata agenda
     ) external returns (uint256 meetingId) {
-        uint256 supply = token.totalSupply();
-        uint256 balance = token.balanceOf(msg.sender);
-        if (!rules.meetsShareThreshold(balance, supply, rules.meetingCallThresholdBps())) {
-            revert ThresholdNotMet(balance, supply);
+        if (block.timestamp == 0) revert SnapshotNotReady(0, 0);
+        uint48 snapshot = uint48(block.timestamp - 1);
+        uint256 supply = IVotes(address(token)).getPastTotalSupply(snapshot);
+        uint256 weight = IVotes(address(token)).getPastVotes(msg.sender, snapshot);
+        if (!rules.meetsShareThreshold(weight, supply, rules.meetingCallThresholdBps())) {
+            revert ThresholdNotMet(weight, supply);
         }
+        emit ShareholderConvened(msg.sender, snapshot, weight, supply);
         return _convene(msg.sender, meetingType, false, invitationHash, invitationCid, agenda);
     }
 
@@ -314,14 +320,39 @@ contract GvAssembly is Ownable {
         if (boundProposal[meetingId][itemIndex] != 0) revert ProposalAlreadyBound(meetingId, itemIndex);
         if (governor.proposalProposer(proposalId) == address(0)) revert UnknownItem(meetingId, itemIndex);
         boundProposal[meetingId][itemIndex] = proposalId;
-        emit ProposalBound(meetingId, itemIndex, proposalId, _agenda[meetingId][itemIndex].class);
+        GvCompanyRules.ResolutionClass class = _agenda[meetingId][itemIndex].class;
+        uint8 rank = uint8(class) + 1;
+        if (rank > strictestClassRank[proposalId]) strictestClassRank[proposalId] = rank;
+        emit ProposalBound(meetingId, itemIndex, proposalId, class);
+    }
+
+    /// @notice Class used at execution. Unbound proposals are qualified, which is the stricter rule.
+    function executionClass(uint256 proposalId) public view returns (GvCompanyRules.ResolutionClass) {
+        uint8 rank = strictestClassRank[proposalId];
+        if (rank == 0) return GvCompanyRules.ResolutionClass.Qualified;
+        return GvCompanyRules.ResolutionClass(rank - 1);
+    }
+
+    /**
+     * @notice Called by {GvGovernor} before the timelock runs. Governor mode returns without a check.
+     * Articles and Both require {GvCompanyRules.canonicalOutcome} to report `passed` for {executionClass}.
+     * `state()` on the governor can still say the vote succeeded. This is the execution refusal.
+     */
+    function assertExecutable(uint256 proposalId) external view {
+        if (rules.bindingMode() == GvCompanyRules.BindingMode.Governor) return;
+        (uint256 againstVotes, uint256 forVotes, uint256 abstainVotes) = governor.proposalVotes(proposalId);
+        uint256 snapshot = governor.proposalSnapshot(proposalId);
+        uint256 supply = IVotes(address(token)).getPastTotalSupply(snapshot);
+        GvCompanyRules.ResolutionOutcome memory outcome =
+            rules.canonicalOutcome(executionClass(proposalId), forVotes, againstVotes, abstainVotes, supply);
+        if (!outcome.passed) revert ArticlesNotPassed(proposalId);
     }
 
     /**
      * @notice Articles check for one agenda item. This is {GvCompanyRules.canonicalOutcome} on the votes
      * the governor recorded and on the votes token's past total supply. It does not reimplement the formula.
-     * `passed` follows the rules' binding mode. The governor's own execution is a separate question: this
-     * function does not read the governor's quorum numerator.
+     * `passed` follows the rules' binding mode. {assertExecutable} is what stops the timelock when this
+     * flag is false and the mode is Articles or Both. This function does not read the governor's quorum numerator.
      *
      * The weights are delegated voting weight, because that is what the governor recorded. Undelegated
      * shares are absent from those weights.

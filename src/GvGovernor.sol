@@ -27,11 +27,17 @@ import { TimelockController } from "@openzeppelin/contracts/governance/TimelockC
  * Counting mode is `support=bravo&quorum=for,abstain`. For must be strictly greater than Against,
  * and For + Abstain must reach quorum. Against does not count toward quorum.
  *
- * This contract is the execution gate. It is intentionally unchanged: one quorum numerator, the
- * shape Tally indexes, and no dependency on {GvCompanyRules}. The articles' binding decision is
- * {GvCompanyRules.canonicalOutcome}, which {GvAssembly.articlesOutcome} returns. A proposal can
- * reach `Executed` here while that outcome says it did not pass. The rules' binding mode records
- * which of the two formulas the articles adopt. It does not block this contract.
+ * This contract stays the OpenZeppelin wizard shape Tally indexes: one quorum numerator, and no
+ * copy of the articles formula. Execution is the extra check. {articlesGate} points at the meeting
+ * contract. {_executeOperations} asks that contract before the timelock runs. When the company
+ * rules' binding mode is Articles or Both, the gate calls {GvCompanyRules.canonicalOutcome} and
+ * reverts unless `passed` is true. Governor mode does not add that check. The governor's own
+ * vote can still succeed while the articles formula fails; the timelock does not run in that case
+ * unless the mode is Governor.
+ *
+ * An unbound proposal is checked as a qualified resolution. Binding it to an agenda item uses the
+ * strictest class it was bound to. The issuer recorded by the factory sets the gate once. After
+ * that, only the timelock can replace it, and that replacement is itself checked by the current gate.
  *
  * The clock is not hardcoded here. It follows the votes token. Kit tokens use `mode=timestamp`,
  * so delay and period are seconds. There is no owner. The executor is the timelock.
@@ -40,6 +46,10 @@ import { TimelockController } from "@openzeppelin/contracts/governance/TimelockC
  * The share minter and the dividend contract keep the original timelock address. Pointing this
  * governor at a new timelock does not move those rights.
  */
+interface IArticlesGate {
+    function assertExecutable(uint256 proposalId) external view;
+}
+
 contract GvGovernor is
     Governor,
     GovernorSettings,
@@ -48,6 +58,20 @@ contract GvGovernor is
     GovernorVotesQuorumFraction,
     GovernorTimelockControl
 {
+    /// @notice The factory records the issuer in the deploy transaction. Direct deployments can call this once too.
+    address public articlesIssuer;
+    /// @notice Meeting contract that reads {GvCompanyRules.canonicalOutcome}. Zero blocks execution.
+    address public articlesGate;
+
+    error ArticlesIssuerAlreadySet();
+    error ArticlesIssuerZero();
+    error NotArticlesIssuer(address caller);
+    error NotArticlesTimelock(address caller);
+    error ArticlesGateZero();
+    error ArticlesGateUnset();
+
+    event ArticlesIssuerRecognized(address indexed issuer);
+    event ArticlesGateSet(address indexed gate);
     constructor(
         string memory name_,
         IVotes token_,
@@ -63,6 +87,30 @@ contract GvGovernor is
         GovernorVotesQuorumFraction(quorumNumerator_)
         GovernorTimelockControl(timelock_)
     { }
+
+    /// @notice Once. The factory calls this in the same transaction as deployment.
+    function recognizeIssuer(address issuer_) external {
+        if (articlesIssuer != address(0)) revert ArticlesIssuerAlreadySet();
+        if (issuer_ == address(0)) revert ArticlesIssuerZero();
+        articlesIssuer = issuer_;
+        emit ArticlesIssuerRecognized(issuer_);
+    }
+
+    /**
+     * @notice Point execution at the meeting contract. The issuer can set it while it is unset.
+     * After that, only the timelock can replace it, which means an executed proposal, and that
+     * proposal is checked by the gate already stored.
+     */
+    function setArticlesGate(address gate) external {
+        if (gate == address(0)) revert ArticlesGateZero();
+        if (articlesGate == address(0)) {
+            if (msg.sender != articlesIssuer) revert NotArticlesIssuer(msg.sender);
+        } else if (msg.sender != _executor()) {
+            revert NotArticlesTimelock(msg.sender);
+        }
+        articlesGate = gate;
+        emit ArticlesGateSet(gate);
+    }
 
     function quorum(uint256 timepoint) public view override(Governor, GovernorVotesQuorumFraction) returns (uint256) {
         return super.quorum(timepoint);
@@ -102,6 +150,9 @@ contract GvGovernor is
         bytes[] memory calldatas,
         bytes32 descriptionHash
     ) internal override(Governor, GovernorTimelockControl) {
+        address gate = articlesGate;
+        if (gate == address(0)) revert ArticlesGateUnset();
+        IArticlesGate(gate).assertExecutable(proposalId);
         super._executeOperations(proposalId, targets, values, calldatas, descriptionHash);
     }
 
