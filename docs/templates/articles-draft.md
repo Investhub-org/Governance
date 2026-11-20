@@ -28,7 +28,7 @@ Counsel must decide whether the Share Token is the Aktienbuch, evidence for the 
 
 ## Parameters
 
-The figures for notice, the fraction of capital that may convene a meeting, ordinary and qualified quorum and majority, the minimum number of directors, capital bands, the drag-along quorum, the tag-along threshold, the pre-emption window, the information-response window, and the recovery delay are the values stored in the company-rules contract.
+The figures for notice, the fraction of capital that may convene a meeting, ordinary and qualified quorum and majority, the binding mode, the minimum number of directors, capital bands, the drag-along quorum, the tag-along threshold, the pre-emption window, the information-response window, the recovery delay, and the unclaimed drag-consideration window are the values stored in the company-rules contract.
 
 At deployment those values are software placeholders. They are not adopted by these articles. Before the articles are passed, the company replaces each placeholder with the figure counsel confirms against the PGR and against these articles, and records the transaction hashes here:
 
@@ -44,6 +44,8 @@ At deployment those values are software placeholders. They are not adopted by th
 | Drag-along quorum | [ ] | [ ] |
 | Tag-along threshold | [ ] | [ ] |
 | Recovery delay and required director signatures | [ ] | [ ] |
+| Binding mode (`Articles`, `Governor`, or `Both`) | [ ] | [ ] |
+| Unclaimed drag-consideration window and recipient | [ ] | [ ] |
 
 A change to those parameters after adoption is a **[ordinary / qualified]** resolution, executed through the timelock. Ownership of the company-rules contract is held by **[the timelock / other]**.
 
@@ -51,13 +53,13 @@ A change to those parameters after adoption is a **[ordinary / qualified]** reso
 
 An annual general meeting and an extraordinary general meeting are convened through the general-meeting contract, as an AGM or an EGM.
 
-The board may convene when the number of directors meets the minimum stored in the company-rules contract. Shareholders may convene when one holder, or holders acting together, meet the convening threshold stored there. Support is measured at the time of convening.
+The board may convene when the number of directors meets the minimum stored in the company-rules contract. One shareholder may convene when that holder's current balance meets the convening threshold stored there. Holders below that fraction file a request. Support on a request is voting power at the second before the request was filed. Undelegated shares count as absent on that path. There is no cap on the number of supporters. A transfer after the snapshot does not let the same shares be counted twice.
 
 The notice period stored for that meeting type runs before the meeting can be opened. The notice is the `InvitationNotice` event: the invitation document hash, the optional content locator, and the agenda hash. Email is sent by the company from its own register. Failure of an email does not cancel a notice that was recorded on-chain.
 
 The agenda stored on-chain is the agenda. Each item has a document hash and a class, ordinary or qualified.
 
-A resolution is passed under these articles only when `articlesOutcome` on the meeting contract reports that the quorum and the majority for that item's class were met. The governor's own quorum is **[adopted as well / not sufficient on its own]**. Counsel fills this sentence. Undelegated shares **[count as absent / are treated as follows: …]**.
+A resolution is passed under these articles only when `articlesOutcome` on the meeting contract reports `passed` for that item. That flag follows `bindingMode` on the company-rules contract. The default is `Articles`: participation against the class quorum, and For against For+Against for the class majority. `Governor` uses For+Abstain for the quorum and requires For to exceed Against. `Both` requires both. The governor contract can still execute a proposal. The articles treat `passed` as the decision. Counsel confirms the mode. Undelegated shares are absent from the governor's weights, and from a convening request.
 
 ## Board
 

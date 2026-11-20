@@ -16,9 +16,13 @@ import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
  * A Liechtenstein lawyer has to replace each one with the figure the articles and the statute require
  * before an issuer relies on it. Do not read a placeholder as a legal fact.
  *
- * Quorum and majority here are inputs to {GvAssembly.articlesOutcome}. They do not replace the
- * OpenZeppelin governor's own quorum. The governor still counts votes. The articles check is a
- * separate query, because the governor exposes one quorum for every proposal and Tally indexes that shape.
+ * {canonicalOutcome} is the one function the articles reference. {GvAssembly.articlesOutcome} calls it
+ * and does not keep a second copy of the formula. {BindingMode} selects which formula `passed` uses.
+ *
+ * {GvGovernor} is a different contract and is left unchanged. It is the execution gate Tally indexes,
+ * with one quorum numerator for every proposal, counting For and Abstain. It does not read this store.
+ * A proposal can execute there while `passed` here is false. Setting the mode to {BindingMode.Both}
+ * makes the articles require both formulas. It still does not stop the governor from executing.
  */
 contract GvCompanyRules is Ownable {
     enum ResolutionClass {
@@ -29,6 +33,31 @@ contract GvCompanyRules is Ownable {
     enum MeetingType {
         AGM,
         EGM
+    }
+
+    /**
+     * @notice Which formula {canonicalOutcome} treats as the articles' decision.
+     * - Articles: participation quorum, and For against For+Against. Abstain counts only toward quorum.
+     * - Governor: the governor's shape (For+Abstain quorum, For strictly above Against), using this
+     *   class's basis points and not the governor contract's percent numerator.
+     * - Both: both formulas must succeed.
+     */
+    enum BindingMode {
+        Articles,
+        Governor,
+        Both
+    }
+
+    struct ResolutionOutcome {
+        bool passed;
+        bool articlesQuorum;
+        bool articlesMajority;
+        bool bravoQuorum;
+        bool bravoMajority;
+        uint256 forVotes;
+        uint256 againstVotes;
+        uint256 abstainVotes;
+        uint256 supply;
     }
 
     struct ClassRule {
@@ -67,6 +96,12 @@ contract GvCompanyRules is Ownable {
     /// @dev Software floor so the recovery delay cannot be switched off. Not a statutory waiting period.
     uint64 public constant MIN_RECOVERY_DELAY = 7 days;
     uint16 public constant PLACEHOLDER_RECOVERY_SIGNATURES = 1;
+    /// @dev One year. Not a statutory waiting period for unclaimed drag consideration.
+    uint64 public constant PLACEHOLDER_UNCLAIMED_WINDOW = 365 days;
+    /// @dev Software floor. The owner cannot turn the unclaimed-drag window off. Not a statute.
+    uint64 public constant MIN_UNCLAIMED_WINDOW = 180 days;
+    /// @dev Software cap, separate from {MAX_PERIOD}, so counsel can store a multi-year wait.
+    uint64 public constant MAX_UNCLAIMED_WINDOW = 1825 days;
 
     /// @dev Software bounds. They stop a nonsense value. They are not statutory minima or maxima.
     uint64 public constant MAX_PERIOD = 366 days;
@@ -85,6 +120,12 @@ contract GvCompanyRules is Ownable {
     uint64 public responseWindow;
     uint64 public recoveryDelay;
     uint16 public recoverySignatures;
+    /// @notice Default is {BindingMode.Articles}. The governor contract does not read this.
+    BindingMode public bindingMode;
+    /// @notice Wait after a drag is final before unclaimed consideration can be redirected.
+    uint64 public unclaimedWindow;
+    /// @notice Where redirected unclaimed drag consideration is credited. Zero disables the redirect.
+    address public unclaimedRecipient;
 
     /// @notice Issuer-declared capital figure in the minor unit the issuer chooses. The contract does not
     /// know the currency and does not check a commercial register.
@@ -102,6 +143,8 @@ contract GvCompanyRules is Ownable {
     error InvalidBand(uint8 minDirectors);
     error SignaturesOutOfRange(uint16 count);
     error UnknownClass();
+    error InvalidBindingMode(uint8 mode);
+    error UnclaimedWindowOutOfRange(uint64 period);
 
     event ClassRuleSet(ResolutionClass indexed class, uint16 quorumBps, uint16 majorityBps);
     event NoticeSet(MeetingType indexed meetingType, uint64 period);
@@ -116,6 +159,9 @@ contract GvCompanyRules is Ownable {
     event ResponseWindowSet(uint64 period);
     event RecoveryDelaySet(uint64 delay);
     event RecoverySignaturesSet(uint16 count);
+    event BindingModeSet(BindingMode mode);
+    event UnclaimedWindowSet(uint64 period);
+    event UnclaimedRecipientSet(address indexed recipient);
     event PlaceholdersLoaded(address indexed issuer);
 
     constructor(address issuer) Ownable(issuer) {
@@ -132,7 +178,9 @@ contract GvCompanyRules is Ownable {
         _setResponse(PLACEHOLDER_RESPONSE_WINDOW);
         _setRecoveryDelay(PLACEHOLDER_RECOVERY_DELAY);
         _setSignatures(PLACEHOLDER_RECOVERY_SIGNATURES);
+        _setUnclaimedWindow(PLACEHOLDER_UNCLAIMED_WINDOW);
         currencyCode = "UNSET";
+        emit BindingModeSet(BindingMode.Articles);
         emit PlaceholdersLoaded(issuer);
     }
 
@@ -225,6 +273,56 @@ contract GvCompanyRules is Ownable {
         _setSignatures(count);
     }
 
+    function setBindingMode(BindingMode mode) external onlyOwner {
+        if (uint8(mode) > uint8(BindingMode.Both)) revert InvalidBindingMode(uint8(mode));
+        bindingMode = mode;
+        emit BindingModeSet(mode);
+    }
+
+    function setUnclaimedWindow(uint64 period) external onlyOwner {
+        _setUnclaimedWindow(period);
+    }
+
+    /// @param recipient Pass zero to disable {GvAcquisition.redirectUnclaimed}. The caller of that
+    /// function cannot choose a different address. This owner should be the kit timelock.
+    function setUnclaimedRecipient(address recipient) external onlyOwner {
+        unclaimedRecipient = recipient;
+        emit UnclaimedRecipientSet(recipient);
+    }
+
+    /**
+     * @notice The articles' outcome for one class. Quorum basis points are the class rule.
+     * `bravoQuorum` uses For+Abstain, which is the governor's counting shape, but it uses this class's
+     * basis points. It is not a call to the governor's `quorum(timepoint)`, whose numerator is a single
+     * percent for every proposal. `bravoMajority` is For strictly greater than Against.
+     */
+    function canonicalOutcome(
+        ResolutionClass class,
+        uint256 forVotes,
+        uint256 againstVotes,
+        uint256 abstainVotes,
+        uint256 supply
+    ) public view returns (ResolutionOutcome memory outcome) {
+        if (uint8(class) > uint8(ResolutionClass.Qualified)) revert UnknownClass();
+        ClassRule memory rule = _classRules[class];
+        outcome.forVotes = forVotes;
+        outcome.againstVotes = againstVotes;
+        outcome.abstainVotes = abstainVotes;
+        outcome.supply = supply;
+        outcome.articlesQuorum = quorumMet(forVotes + againstVotes + abstainVotes, supply, rule.quorumBps);
+        outcome.articlesMajority = majorityMet(forVotes, againstVotes, rule.majorityBps);
+        outcome.bravoQuorum = quorumMet(forVotes + abstainVotes, supply, rule.quorumBps);
+        outcome.bravoMajority = forVotes > againstVotes;
+        if (bindingMode == BindingMode.Governor) {
+            outcome.passed = outcome.bravoQuorum && outcome.bravoMajority;
+        } else if (bindingMode == BindingMode.Both) {
+            outcome.passed =
+                outcome.articlesQuorum && outcome.articlesMajority && outcome.bravoQuorum && outcome.bravoMajority;
+        } else {
+            outcome.passed = outcome.articlesQuorum && outcome.articlesMajority;
+        }
+    }
+
     /// @notice True when `amount` is at least `bps` of `supply`, rounding the threshold up.
     function meetsShareThreshold(uint256 amount, uint256 supply, uint16 bps) public pure returns (bool) {
         if (supply == 0 || bps == 0) return false;
@@ -313,5 +411,11 @@ contract GvCompanyRules is Ownable {
         if (count == 0 || count > MAX_DIRECTORS_IN_BAND) revert SignaturesOutOfRange(count);
         recoverySignatures = count;
         emit RecoverySignaturesSet(count);
+    }
+
+    function _setUnclaimedWindow(uint64 period) private {
+        if (period < MIN_UNCLAIMED_WINDOW || period > MAX_UNCLAIMED_WINDOW) revert UnclaimedWindowOutOfRange(period);
+        unclaimedWindow = period;
+        emit UnclaimedWindowSet(period);
     }
 }

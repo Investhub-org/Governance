@@ -52,6 +52,8 @@ contract LifecycleSim is Test {
     address internal dragBuyer;
     address internal hub;
     address internal observer;
+    address internal recovered;
+    address internal reserve;
 
     GvKitFactory internal factory;
     GvDirectory internal directory;
@@ -90,12 +92,15 @@ contract LifecycleSim is Test {
     uint256 internal preEmptionId;
     uint256 internal tagId;
     uint256 internal dragId;
+    uint256 internal conveningRequestId;
+    uint256 internal recoveryId;
 
     string internal phaseName;
     uint256 internal phaseGas;
 
     function simulate(uint256 holders) public {
         uint256 started = vm.unixTime();
+        uint256 startedGas = gasleft();
         holderCount = holders;
         _roles();
         _loadBook();
@@ -110,8 +115,9 @@ contract LifecycleSim is Test {
         _begin("issue");
         _publishAndWhitelist();
         _accept();
+        _armPolicy();
         _distribute();
-        _delegate();
+        _delegateFounders();
         _buildTree();
 
         _begin("agm");
@@ -127,6 +133,9 @@ contract LifecycleSim is Test {
         _begin("information");
         _information();
 
+        _begin("recovery");
+        _recovery();
+
         _begin("preemption");
         _preEmption();
 
@@ -138,6 +147,7 @@ contract LifecycleSim is Test {
         _flush();
 
         console2.log("TOTAL", totalGas);
+        console2.log("simulate gas", startedGas - gasleft());
         console2.log("runtime ms", vm.unixTime() - started);
         console2.log("holders", holderCount);
         console2.log("investor0", investors[0]);
@@ -156,6 +166,8 @@ contract LifecycleSim is Test {
         dragBuyer = InvestorBook.role("drag-buyer");
         hub = InvestorBook.role("investhub");
         observer = InvestorBook.role("observer");
+        recovered = InvestorBook.role("recovered-holder");
+        reserve = InvestorBook.role("unclaimed-reserve");
     }
 
     function _loadBook() internal {
@@ -166,6 +178,7 @@ contract LifecycleSim is Test {
             assertTrue(investors[index] != issuer && investors[index] != hub);
             assertTrue(investors[index] != preBuyer && investors[index] != tagBuyer);
             assertTrue(investors[index] != dragBuyer && investors[index] != director);
+            assertTrue(investors[index] != recovered && investors[index] != reserve);
         }
         assertEq(book[0], 320_000);
         assertEq(book[1], 180_000);
@@ -251,6 +264,10 @@ contract LifecycleSim is Test {
         gasUsed += _gas();
         terms = new GvShareTerms(issuer, share, rules, address(usdc));
         gasUsed += _gas();
+        rules.setUnclaimedRecipient(reserve);
+        gasUsed += _gas();
+        rules.setBindingMode(GvCompanyRules.BindingMode.Articles);
+        gasUsed += _gas();
         acquisition = new GvAcquisition(share, rules, terms);
         gasUsed += _gas();
         terms.setAcquisition(address(acquisition));
@@ -271,60 +288,46 @@ contract LifecycleSim is Test {
         gasUsed += _gas();
         assemblyGv.setDirector(address(timelock), true);
         gasUsed += _gas();
+        terms.setIssuerTreasury(issuer);
+        gasUsed += _gas();
         vm.stopPrank();
         _add("publish SHA and appoint directors", gasUsed);
 
-        address[] memory roles = _roleAccounts();
-        vm.startPrank(issuer);
-        uint256 roleGas;
-        for (uint256 index; index < roles.length; ++index) {
-            terms.setWhitelist(roles[index], true);
-            roleGas += _gas();
-        }
-        uint256 first;
-        uint256 last;
-        uint256 investorGas;
-        for (uint256 index; index < holderCount; ++index) {
-            terms.setWhitelist(investors[index], true);
-            uint256 used = _gas();
-            if (index == 0) first = used;
-            last = used;
-            investorGas += used;
-        }
-        vm.stopPrank();
-        _add("whitelist roles", roleGas);
-        _add("whitelist investors", investorGas);
-        console2.log("whitelist first", first);
-        console2.log("whitelist last", last);
-        console2.log("whitelist average", investorGas / holderCount);
+        address[] memory accounts = _onboardingAccounts();
+        (uint256 first, uint256 last, uint256 sum, uint256 batches) = _whitelistBatches(accounts);
+        _add("whitelist batch", sum);
+        console2.log("whitelist batches", batches);
+        console2.log("whitelist batch first", first);
+        console2.log("whitelist batch last", last);
+        console2.log("whitelist per account", sum / accounts.length);
+        assertTrue(terms.whitelisted(investors[holderCount - 1]));
+        assertTrue(terms.whitelisted(recovered));
+        assertFalse(terms.whitelisted(hub));
     }
 
     function _accept() internal {
-        address[] memory roles = _roleAccounts();
-        uint256 roleGas;
-        for (uint256 index; index < roles.length; ++index) {
-            vm.prank(roles[index]);
-            terms.acceptSha();
-            roleGas += _gas();
+        address[] memory accounts = _onboardingAccounts();
+        bytes32[] memory leaves = new bytes32[](accounts.length);
+        uint256 version = terms.shaVersion();
+        bytes32 hash = terms.shaHash();
+        for (uint256 index; index < accounts.length; ++index) {
+            leaves[index] = keccak256(bytes.concat(keccak256(abi.encode(accounts[index], version, hash))));
         }
-        uint256 first;
-        uint256 last;
-        uint256 investorGas;
-        for (uint256 index; index < holderCount; ++index) {
-            vm.prank(investors[index]);
-            terms.acceptSha();
-            uint256 used = _gas();
-            if (index == 0) first = used;
-            last = used;
-            investorGas += used;
-        }
-        _add("accept SHA roles", roleGas);
-        _add("accept SHA investors", investorGas);
-        console2.log("accept first", first);
-        console2.log("accept last", last);
-        console2.log("accept average", investorGas / holderCount);
+        bytes32[][] memory tree = MerkleBuilder.build(leaves);
+        vm.prank(issuer);
+        terms.setShaAcceptanceRoot(MerkleBuilder.root(tree));
+        _add("SHA acceptance root", _gas());
+
+        (uint256 first, uint256 last, uint256 sum, uint256 batches) = _acceptBatches(accounts, tree);
+        _add("accept SHA batch", sum);
+        console2.log("accept batches", batches);
+        console2.log("accept batch first", first);
+        console2.log("accept batch last", last);
+        console2.log("accept per account", sum / accounts.length);
         assertTrue(terms.holdsCurrentSha(investors[holderCount - 1]));
-        assertFalse(terms.whitelisted(hub));
+        assertTrue(terms.holdsCurrentSha(issuer));
+        assertTrue(terms.holdsCurrentSha(recovered));
+        assertEq(terms.acceptedVersion(investors[0]), version);
     }
 
     function _distribute() internal {
@@ -347,9 +350,43 @@ contract LifecycleSim is Test {
         assertEq(share.balanceOf(issuer), 0);
         assertEq(share.balanceOf(investors[0]), book[0]);
         assertEq(share.totalSupply(), InvestorBook.SUPPLY);
+        assertEq(share.transferPolicy(), address(terms));
+        assertEq(terms.issuerTreasury(), issuer);
+        vm.prank(investors[3]);
+        vm.expectRevert(GvShareTerms.PreEmptionRequired.selector);
+        share.transfer(investors[4], 1);
     }
 
-    function _delegate() internal {
+    function _armPolicy() internal {
+        vm.prank(issuer);
+        share.delegate(issuer);
+        _add("delegate issuer", _gas());
+        vm.warp(block.timestamp + 1);
+
+        address[] memory targets = new address[](1);
+        targets[0] = address(share);
+        uint256[] memory values = new uint256[](1);
+        bytes[] memory calls = new bytes[](1);
+        calls[0] = abi.encodeCall(GvShare.setTransferPolicy, (address(terms)));
+        string memory description = "Turn on the share transfer policy";
+        vm.prank(issuer);
+        uint256 id = governor.propose(targets, values, calls, description);
+        _add("policy propose", _gas());
+        vm.warp(governor.proposalSnapshot(id) + 1);
+        vm.prank(issuer);
+        governor.castVote(id, 1);
+        _add("policy vote", _gas());
+        vm.warp(governor.proposalDeadline(id) + 1);
+        bytes32 descriptionHash = keccak256(bytes(description));
+        governor.queue(targets, values, calls, descriptionHash);
+        _add("policy queue", _gas());
+        vm.warp(governor.proposalEta(id));
+        governor.execute(targets, values, calls, descriptionHash);
+        _add("policy execute", _gas());
+        assertEq(share.transferPolicy(), address(terms));
+    }
+
+    function _delegateFounders() internal {
         vm.prank(investors[0]);
         share.delegate(investors[0]);
         uint256 gasUsed = _gas();
@@ -471,9 +508,15 @@ contract LifecycleSim is Test {
             "Appoint an observer", keccak256("sim-observer-resolution"), GvCompanyRules.ResolutionClass.Qualified
         );
         vm.prank(investors[0]);
-        egmId = assemblyGv.conveneByShareholders(
+        conveningRequestId = assemblyGv.fileConveningRequest(
             GvCompanyRules.MeetingType.EGM, keccak256("sim-egm-invitation"), CID, agenda
         );
+        _add("file convening request", _gas());
+        vm.prank(investors[0]);
+        assemblyGv.supportConveningRequest(conveningRequestId);
+        _add("support convening request", _gas());
+        assertGe(assemblyGv.supportOf(conveningRequestId), 100_000);
+        egmId = assemblyGv.conveneFromRequest(conveningRequestId);
         _add("convene EGM", _gas());
         assertFalse(assemblyGv.meeting(egmId).convenedByBoard);
         assertEq(assemblyGv.meeting(egmId).convener, investors[0]);
@@ -509,6 +552,22 @@ contract LifecycleSim is Test {
         _add("answer information request", _gas());
         assertTrue(info.request(requestId).late);
         assertGt(info.request(requestId).answeredAt, info.request(requestId).responseDeadline);
+    }
+
+    function _recovery() internal {
+        address from = investors[6];
+        uint256 amount = share.balanceOf(from);
+        assertGt(amount, 0);
+        vm.prank(director);
+        recoveryId = recovery.proposeRecovery(from, recovered, amount, keccak256("sim-board-minutes"), false);
+        _add("propose recovery", _gas());
+        vm.warp(recovery.recovery(recoveryId).executeAfter);
+        recovery.executeRecovery(recoveryId);
+        _add("execute recovery", _gas());
+        assertEq(share.balanceOf(from), 0);
+        assertEq(share.balanceOf(recovered), amount);
+        assertTrue(recovery.recovery(recoveryId).executed);
+        assertEq(recovery.recovery(recoveryId).orderHash, keccak256("sim-board-minutes"));
     }
 
     function _preEmption() internal {
@@ -575,20 +634,21 @@ contract LifecycleSim is Test {
     }
 
     function _drag() internal {
-        _mintApprove(dragBuyer, address(acquisition), InvestorBook.SUPPLY * InvestorBook.PRICE);
+        _mintApprove(tagBuyer, address(acquisition), InvestorBook.SUPPLY * InvestorBook.PRICE);
         uint16 dragQuorum = rules.dragQuorumBps();
-        vm.prank(dragBuyer);
+        vm.prank(tagBuyer);
         dragId = acquisition.postDrag(InvestorBook.PRICE, uint64(block.timestamp + 14 days), dragQuorum);
         _add("post drag", _gas());
+        assertEq(acquisition.drag(dragId).buyer, tagBuyer);
+        assertEq(acquisition.drag(dragId).buyerHeldAtPost, 301_000);
 
-        address[] memory acceptors = new address[](7);
-        acceptors[0] = tagBuyer;
-        acceptors[1] = investors[0];
-        acceptors[2] = investors[1];
-        acceptors[3] = investors[2];
-        acceptors[4] = investors[3];
-        acceptors[5] = investors[4];
-        acceptors[6] = preBuyer;
+        address[] memory acceptors = new address[](6);
+        acceptors[0] = investors[0];
+        acceptors[1] = investors[1];
+        acceptors[2] = investors[2];
+        acceptors[3] = investors[3];
+        acceptors[4] = investors[4];
+        acceptors[5] = preBuyer;
         uint256 approveGas;
         uint256 acceptGas;
         uint256 tendered;
@@ -604,50 +664,65 @@ contract LifecycleSim is Test {
         }
         _add("approve drag tenders", approveGas);
         _add("accept drag", acceptGas);
-        assertEq(tendered, 800_000);
-        assertGe(acquisition.drag(dragId).acceptedShares, 750_000);
+        assertEq(tendered, 499_000);
+        (uint256 counted, uint256 requiredShares, uint256 buyerCounted_) = acquisition.dragQuorumProgress(dragId);
+        assertEq(buyerCounted_, 301_000);
+        assertEq(counted, 800_000);
+        assertEq(requiredShares, 750_000);
+        console2.log("drag counted", counted);
+        console2.log("drag buyer counted", buyerCounted_);
 
         acquisition.executeDrag(dragId);
         _add("execute drag", _gas());
         assertTrue(acquisition.drag(dragId).executed);
+        assertTrue(acquisition.blocksPeerTransfers());
 
-        uint256 convertGas;
-        uint256 conversions;
-        uint256 first;
-        uint256 last;
-        for (uint256 index; index < holderCount; ++index) {
-            (uint256 used, bool did) = _convert(investors[index]);
-            if (!did) continue;
-            if (conversions == 0) first = used;
-            last = used;
-            convertGas += used;
-            conversions++;
+        address[] memory pulling = new address[](7);
+        pulling[0] = investors[0];
+        pulling[1] = investors[1];
+        pulling[2] = investors[2];
+        pulling[3] = investors[3];
+        pulling[4] = investors[4];
+        pulling[5] = preBuyer;
+        pulling[6] = recovered;
+        uint256 claimGas;
+        for (uint256 index; index < pulling.length; ++index) {
+            acquisition.claimDrag(dragId, pulling[index]);
+            uint256 used = _gas();
+            if (index == 0) console2.log("claim first", used);
+            claimGas += used;
         }
-        (uint256 preGas, bool preDid) = _convert(preBuyer);
-        (uint256 tagGas, bool tagDid) = _convert(tagBuyer);
-        assertTrue(preDid && tagDid);
-        if (conversions == 0) first = preGas;
-        last = tagGas;
-        convertGas += preGas + tagGas;
-        conversions += 2;
-        _add("convert drag", convertGas);
-        console2.log("convert count", conversions);
-        console2.log("convert first", first);
-        console2.log("convert last", last);
-        console2.log("convert average", convertGas / conversions);
+        _add("claim drag", claimGas);
+        console2.log("claim count", pulling.length);
 
-        acquisition.refundDragSurplus(dragId);
-        _add("refund drag surplus", _gas());
+        uint256 start = 10;
+        uint256 lastIndex = holderCount - 1;
+        uint256 available = lastIndex > start ? lastIndex - start : 0;
+        uint256 n = available > acquisition.MAX_PUSH() ? acquisition.MAX_PUSH() : available;
+        if (n > 0) {
+            address[] memory batch = new address[](n);
+            for (uint256 index; index < n; ++index) {
+                batch[index] = investors[start + index];
+            }
+            uint256 pushed = acquisition.pushDrag(dragId, batch);
+            _add("push drag", _gas());
+            assertEq(pushed, n);
+            console2.log("push count", n);
+        }
+
+        vm.prank(investors[7]);
+        vm.expectRevert(GvShareTerms.TransferWindowOpen.selector);
+        share.transfer(investors[8], 1);
 
         vm.prank(investors[3]);
         acquisition.withdrawProceeds(address(usdc));
         _add("withdraw sale proceeds", _gas());
-    }
 
-    function _convert(address account) internal returns (uint256 gasUsed, bool did) {
-        if (share.balanceOf(account) == 0 && acquisition.acceptedAmount(dragId, account) == 0) return (0, false);
-        acquisition.convert(dragId, account);
-        return (_gas(), true);
+        vm.warp(uint256(acquisition.drag(dragId).executedAt) + rules.unclaimedWindow() + 1);
+        acquisition.redirectUnclaimed(dragId, investors[holderCount - 1]);
+        _add("redirect unclaimed", _gas());
+        assertEq(share.balanceOf(investors[holderCount - 1]), 0);
+        assertEq(acquisition.proceeds(reserve, address(usdc)), book[holderCount - 1] * InvestorBook.PRICE);
     }
 
     function _conduct(
@@ -745,25 +820,41 @@ contract LifecycleSim is Test {
     }
 
     function _assertArticles(uint256 meetingId, uint256 item, uint256 proposalId) internal view {
-        (bool quorumReached, bool majorityReached,,,,) = assemblyGv.articlesOutcome(meetingId, item, proposalId);
-        assertTrue(quorumReached, "articles quorum");
-        assertTrue(majorityReached, "articles majority");
+        GvCompanyRules.ResolutionOutcome memory outcome = assemblyGv.articlesOutcome(meetingId, item, proposalId);
+        assertEq(uint8(rules.bindingMode()), uint8(GvCompanyRules.BindingMode.Articles));
+        assertTrue(outcome.passed, "articles passed");
+        assertTrue(outcome.articlesQuorum, "articles quorum");
+        assertTrue(outcome.articlesMajority, "articles majority");
+        assertTrue(outcome.bravoMajority, "governor-shaped majority");
     }
 
     function _assertFinal() internal view {
-        assertEq(share.balanceOf(dragBuyer), InvestorBook.SUPPLY);
         assertEq(share.totalSupply(), InvestorBook.SUPPLY);
         assertEq(share.balanceOf(address(acquisition)), 0);
         assertEq(share.balanceOf(address(terms)), 0);
         assertEq(share.balanceOf(issuer), 0);
         assertEq(share.balanceOf(hub), 0);
-        assertTrue(acquisition.drag(dragId).surplusRefunded);
-        assertEq(acquisition.drag(dragId).paidOut, acquisition.drag(dragId).escrowed);
-        assertEq(acquisition.activeDrag(), 0);
+        assertEq(share.balanceOf(dragBuyer), 0);
+        assertTrue(acquisition.drag(dragId).executed);
+        assertFalse(acquisition.drag(dragId).surplusRefunded);
+        assertTrue(acquisition.blocksPeerTransfers());
+        assertEq(acquisition.drag(dragId).buyer, tagBuyer);
+        assertEq(acquisition.drag(dragId).buyerHeldAtPost, 301_000);
+        assertLt(acquisition.drag(dragId).paidOut, acquisition.drag(dragId).escrowed);
 
-        for (uint256 index; index < holderCount; ++index) {
-            assertEq(share.balanceOf(investors[index]), 0, "holder still has shares");
-        }
+        assertEq(share.balanceOf(investors[0]), 0);
+        assertEq(share.balanceOf(investors[1]), 0);
+        assertEq(share.balanceOf(investors[2]), 0);
+        assertEq(share.balanceOf(investors[3]), 0);
+        assertEq(share.balanceOf(investors[4]), 0);
+        assertEq(share.balanceOf(investors[6]), 0);
+        assertEq(share.balanceOf(investors[7]), book[7]);
+        assertEq(share.balanceOf(investors[10]), 0);
+        assertEq(share.balanceOf(investors[holderCount - 1]), 0);
+        assertEq(share.balanceOf(preBuyer), 0);
+        assertEq(share.balanceOf(recovered), 0);
+        assertGt(share.balanceOf(tagBuyer), 301_000);
+
         assertEq(acquisition.proceeds(investors[0], address(usdc)), book[0] * InvestorBook.PRICE);
         assertEq(acquisition.proceeds(investors[1], address(usdc)), 181_000 * InvestorBook.PRICE);
         assertEq(terms.proceeds(investors[2], address(usdc)), 10_000 * InvestorBook.PRICE);
@@ -771,13 +862,14 @@ contract LifecycleSim is Test {
         assertEq(acquisition.proceeds(investors[3], address(usdc)), 0);
         assertEq(usdc.balanceOf(investors[3]), 100_000 * InvestorBook.PRICE);
         assertEq(acquisition.proceeds(investors[4], address(usdc)), book[4] * InvestorBook.PRICE);
-        for (uint256 index = 5; index < holderCount; ++index) {
-            assertEq(acquisition.proceeds(investors[index], address(usdc)), book[index] * InvestorBook.PRICE);
-        }
+        assertEq(acquisition.proceeds(investors[6], address(usdc)), 0);
+        assertEq(acquisition.proceeds(investors[7], address(usdc)), 0);
+        assertEq(acquisition.proceeds(investors[10], address(usdc)), book[10] * InvestorBook.PRICE);
+        assertEq(acquisition.proceeds(recovered, address(usdc)), book[6] * InvestorBook.PRICE);
         assertEq(acquisition.proceeds(preBuyer, address(usdc)), 9000 * InvestorBook.PRICE);
-        assertEq(acquisition.proceeds(tagBuyer, address(usdc)), 937_500 * InvestorBook.PRICE);
-        assertEq(share.balanceOf(preBuyer), 0);
-        assertEq(share.balanceOf(tagBuyer), 0);
+        assertEq(acquisition.proceeds(tagBuyer, address(usdc)), 636_500 * InvestorBook.PRICE);
+        assertEq(acquisition.proceeds(investors[holderCount - 1], address(usdc)), 0);
+        assertEq(acquisition.proceeds(reserve, address(usdc)), book[holderCount - 1] * InvestorBook.PRICE);
 
         uint256 wallets = usdc.balanceOf(investors[0]) + usdc.balanceOf(investors[1]) + usdc.balanceOf(investors[3])
             + usdc.balanceOf(investors[holderCount / 2]) + usdc.balanceOf(investors[holderCount - 1]);
@@ -785,6 +877,66 @@ contract LifecycleSim is Test {
             + usdc.balanceOf(address(acquisition));
         uint256 minted = dividendTotal + (1000 + 9000 + 937_500 + InvestorBook.SUPPLY) * InvestorBook.PRICE;
         assertEq(located, minted, "USDC conservation");
+    }
+
+    function _onboardingAccounts() internal view returns (address[] memory accounts) {
+        address[] memory roles = _roleAccounts();
+        accounts = new address[](holderCount + roles.length + 1);
+        for (uint256 index; index < holderCount; ++index) {
+            accounts[index] = investors[index];
+        }
+        for (uint256 index; index < roles.length; ++index) {
+            accounts[holderCount + index] = roles[index];
+        }
+        accounts[holderCount + roles.length] = recovered;
+    }
+
+    function _whitelistBatches(address[] memory accounts)
+        internal
+        returns (uint256 first, uint256 last, uint256 sum, uint256 batches)
+    {
+        vm.startPrank(issuer);
+        uint256 cursor;
+        while (cursor < accounts.length) {
+            uint256 n = accounts.length - cursor;
+            if (n > terms.MAX_BATCH()) n = terms.MAX_BATCH();
+            address[] memory slice = new address[](n);
+            for (uint256 index; index < n; ++index) {
+                slice[index] = accounts[cursor + index];
+            }
+            terms.setWhitelistBatch(slice, true);
+            uint256 used = _gas();
+            if (batches == 0) first = used;
+            last = used;
+            sum += used;
+            batches += 1;
+            cursor += n;
+        }
+        vm.stopPrank();
+    }
+
+    function _acceptBatches(address[] memory accounts, bytes32[][] memory tree)
+        internal
+        returns (uint256 first, uint256 last, uint256 sum, uint256 batches)
+    {
+        uint256 cursor;
+        while (cursor < accounts.length) {
+            uint256 n = accounts.length - cursor;
+            if (n > terms.MAX_BATCH()) n = terms.MAX_BATCH();
+            address[] memory slice = new address[](n);
+            bytes32[][] memory proofs = new bytes32[][](n);
+            for (uint256 index; index < n; ++index) {
+                slice[index] = accounts[cursor + index];
+                proofs[index] = MerkleBuilder.proof(tree, cursor + index);
+            }
+            terms.acceptShaWithProofBatch(slice, proofs);
+            uint256 used = _gas();
+            if (batches == 0) first = used;
+            last = used;
+            sum += used;
+            batches += 1;
+            cursor += n;
+        }
     }
 
     function _assertIndependence() internal {

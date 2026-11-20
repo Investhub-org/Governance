@@ -100,7 +100,7 @@ contract GvShare is ERC20, ERC20Permit, ERC20Votes {
      * @notice Move shares for a bound module, skipping the transfer policy.
      * This is not a general admin function. The caller must be a module the timelock bound, and that
      * module must report that this exact transfer is the one its own function just armed. Mint and burn
-     * are rejected here. Drag conversion and matured recovery are the intended callers.
+     * are rejected here. A drag claim and a matured recovery are the intended callers.
      */
     function moduleTransfer(address from, address to, uint256 amount) external {
         if (!shareModules[msg.sender]) revert NotShareModule(msg.sender);

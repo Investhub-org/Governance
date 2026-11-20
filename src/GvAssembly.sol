@@ -19,9 +19,12 @@ import { GvGovernor } from "./GvGovernor.sol";
  * register, which stays off-chain.
  *
  * Who may convene comes from {GvCompanyRules}: a director, while the board meets the configured minimum,
- * or shareholders whose balances meet the configured fraction of supply. A single holder at or above the
- * fraction may convene alone. Holders below it file a request and convene once the combined current
- * balances still meet the fraction. Support is re-read at convening time, so shares that moved no longer count.
+ * or one shareholder whose current balance meets the configured fraction of supply. Holders below that
+ * fraction file a request. Support on a request is each supporter's ERC-20 Votes weight at the second
+ * before the request was filed, added once into a running tally. There is no supporter cap. A transfer
+ * after that snapshot cannot be counted twice: the recipient's past votes do not include those shares,
+ * and the sender can support only once. Undelegated shares weigh zero on this path. The single-holder
+ * path still reads the live balance, because one balance cannot be pledged twice.
  *
  * The notice period is stored on the meeting when it is convened. A later change to the rules does not
  * shorten a notice that was already given. The meeting cannot be opened before that deadline.
@@ -62,12 +65,13 @@ contract GvAssembly is Ownable {
         bool convened;
         bool cancelled;
         uint256 meetingId;
+        uint48 voteSnapshot;
+        uint256 supportVotes;
     }
 
     uint256 public constant MAX_AGENDA = 16;
     uint256 public constant MAX_TITLE = 120;
     uint256 public constant MAX_CID = 128;
-    uint256 public constant MAX_SUPPORTERS = 64;
 
     IERC20 public immutable token;
     GvCompanyRules public immutable rules;
@@ -84,8 +88,7 @@ contract GvAssembly is Ownable {
     uint256 public requestCount;
     mapping(uint256 requestId => ConveningRequest) private _requests;
     mapping(uint256 requestId => AgendaItem[]) private _requestAgenda;
-    mapping(uint256 requestId => address[]) private _supporters;
-    mapping(uint256 requestId => mapping(address account => uint256 amount)) public pledged;
+    mapping(uint256 requestId => mapping(address account => bool)) public hasSupported;
 
     error ZeroAddress();
     error TokenMismatch();
@@ -107,7 +110,7 @@ contract GvAssembly is Ownable {
     error RequestClosed(uint256 requestId);
     error NoShares(address account);
     error AlreadySupported(address account);
-    error TooManySupporters();
+    error SnapshotNotReady(uint256 requestId, uint48 voteSnapshot);
     error UnknownItem(uint256 meetingId, uint256 index);
     error ProposalAlreadyBound(uint256 meetingId, uint256 index);
     error NotHolder(address caller);
@@ -141,8 +144,8 @@ contract GvAssembly is Ownable {
     event MeetingOpened(uint256 indexed meetingId);
     event MeetingClosed(uint256 indexed meetingId);
     event MeetingCancelled(uint256 indexed meetingId, address indexed by);
-    event ConveningRequested(uint256 indexed requestId, address indexed initiator, uint256 pledged);
-    event ConveningSupported(uint256 indexed requestId, address indexed account, uint256 pledged);
+    event ConveningRequested(uint256 indexed requestId, address indexed initiator, uint48 voteSnapshot);
+    event ConveningSupported(uint256 indexed requestId, address indexed account, uint256 weight);
     event ProposalBound(
         uint256 indexed meetingId,
         uint256 indexed itemIndex,
@@ -180,20 +183,9 @@ contract GvAssembly is Ownable {
         return _requests[requestId];
     }
 
-    function supporterCount(uint256 requestId) external view returns (uint256) {
-        return _supporters[requestId].length;
-    }
-
-    /// @notice Sum of each supporter's current balance, capped by what they pledged. Moved shares drop out.
-    function supportOf(uint256 requestId) public view returns (uint256 total) {
-        address[] storage list = _supporters[requestId];
-        uint256 n = list.length;
-        for (uint256 i; i < n; ++i) {
-            address account = list[i];
-            uint256 amount = pledged[requestId][account];
-            uint256 balance = token.balanceOf(account);
-            total += balance < amount ? balance : amount;
-        }
+    /// @notice Sum of supporter voting weights frozen at the request snapshot. O(1).
+    function supportOf(uint256 requestId) public view returns (uint256) {
+        return _requests[requestId].supportVotes;
     }
 
     function hashAgenda(AgendaItem[] calldata agenda) external pure returns (bytes32) {
@@ -250,8 +242,8 @@ contract GvAssembly is Ownable {
     ) external returns (uint256 requestId) {
         _checkInvitation(invitationHash, invitationCid);
         _checkAgenda(agenda);
-        uint256 balance = token.balanceOf(msg.sender);
-        if (balance == 0) revert NoShares(msg.sender);
+        if (token.balanceOf(msg.sender) == 0) revert NoShares(msg.sender);
+        if (block.timestamp == 0) revert SnapshotNotReady(0, 0);
         requestId = ++requestCount;
         ConveningRequest storage filed = _requests[requestId];
         filed.meetingType = meetingType;
@@ -260,22 +252,13 @@ contract GvAssembly is Ownable {
         filed.invitationHash = invitationHash;
         filed.invitationCid = invitationCid;
         filed.agendaHash = keccak256(abi.encode(agenda));
+        filed.voteSnapshot = uint48(block.timestamp - 1);
         _writeAgenda(_requestAgenda[requestId], agenda);
-        _pledge(requestId, msg.sender, balance);
-        emit ConveningRequested(requestId, msg.sender, balance);
+        emit ConveningRequested(requestId, msg.sender, filed.voteSnapshot);
     }
 
     function supportConveningRequest(uint256 requestId) external {
-        ConveningRequest storage filed = _requests[requestId];
-        if (filed.initiator == address(0)) revert UnknownRequest(requestId);
-        if (filed.convened || filed.cancelled) revert RequestClosed(requestId);
-        if (block.timestamp > filed.expiresAt) revert RequestExpired(requestId);
-        if (pledged[requestId][msg.sender] != 0) revert AlreadySupported(msg.sender);
-        uint256 balance = token.balanceOf(msg.sender);
-        if (balance == 0) revert NoShares(msg.sender);
-        if (_supporters[requestId].length >= MAX_SUPPORTERS) revert TooManySupporters();
-        _pledge(requestId, msg.sender, balance);
-        emit ConveningSupported(requestId, msg.sender, balance);
+        _support(requestId, msg.sender);
     }
 
     function conveneFromRequest(uint256 requestId) external returns (uint256 meetingId) {
@@ -283,8 +266,9 @@ contract GvAssembly is Ownable {
         if (filed.initiator == address(0)) revert UnknownRequest(requestId);
         if (filed.convened || filed.cancelled) revert RequestClosed(requestId);
         if (block.timestamp > filed.expiresAt) revert RequestExpired(requestId);
-        uint256 supply = token.totalSupply();
-        uint256 support = supportOf(requestId);
+        if (block.timestamp <= filed.voteSnapshot) revert SnapshotNotReady(requestId, filed.voteSnapshot);
+        uint256 supply = IVotes(address(token)).getPastTotalSupply(filed.voteSnapshot);
+        uint256 support = filed.supportVotes;
         if (!rules.meetsShareThreshold(support, supply, rules.meetingCallThresholdBps())) {
             revert ThresholdNotMet(support, supply);
         }
@@ -334,34 +318,25 @@ contract GvAssembly is Ownable {
     }
 
     /**
-     * @notice Articles check for one agenda item. Quorum is participation (for + against + abstain) against
-     * the votes token's past total supply. Majority is for-votes against for+against, strictly above the
-     * configured fraction. Abstain counts toward quorum only.
+     * @notice Articles check for one agenda item. This is {GvCompanyRules.canonicalOutcome} on the votes
+     * the governor recorded and on the votes token's past total supply. It does not reimplement the formula.
+     * `passed` follows the rules' binding mode. The governor's own execution is a separate question: this
+     * function does not read the governor's quorum numerator.
      *
-     * This uses delegated voting weight because that is what the governor recorded. Whether the PGR or the
-     * articles instead count every share, including undelegated shares, as present or absent is a question
-     * for counsel. The numbers themselves are the placeholders or the values the owner stored.
+     * The weights are delegated voting weight, because that is what the governor recorded. Undelegated
+     * shares are absent from those weights.
      */
     function articlesOutcome(uint256 meetingId, uint256 itemIndex, uint256 proposalId)
         external
         view
-        returns (
-            bool quorumReached,
-            bool majorityReached,
-            uint256 forVotes,
-            uint256 againstVotes,
-            uint256 abstainVotes,
-            uint256 supply
-        )
+        returns (GvCompanyRules.ResolutionOutcome memory outcome)
     {
         if (itemIndex >= _agenda[meetingId].length) revert UnknownItem(meetingId, itemIndex);
-        GvCompanyRules.ClassRule memory rule = rules.classRule(_agenda[meetingId][itemIndex].class);
-        (againstVotes, forVotes, abstainVotes) = governor.proposalVotes(proposalId);
+        (uint256 againstVotes, uint256 forVotes, uint256 abstainVotes) = governor.proposalVotes(proposalId);
         uint256 snapshot = governor.proposalSnapshot(proposalId);
-        supply = IVotes(address(token)).getPastTotalSupply(snapshot);
-        uint256 participation = forVotes + againstVotes + abstainVotes;
-        quorumReached = rules.quorumMet(participation, supply, rule.quorumBps);
-        majorityReached = rules.majorityMet(forVotes, againstVotes, rule.majorityBps);
+        uint256 supply = IVotes(address(token)).getPastTotalSupply(snapshot);
+        outcome =
+            rules.canonicalOutcome(_agenda[meetingId][itemIndex].class, forVotes, againstVotes, abstainVotes, supply);
     }
 
     function _convene(
@@ -421,9 +396,18 @@ contract GvAssembly is Ownable {
         }
     }
 
-    function _pledge(uint256 requestId, address account, uint256 amount) private {
-        pledged[requestId][account] = amount;
-        _supporters[requestId].push(account);
+    function _support(uint256 requestId, address account) private {
+        ConveningRequest storage filed = _requests[requestId];
+        if (filed.initiator == address(0)) revert UnknownRequest(requestId);
+        if (filed.convened || filed.cancelled) revert RequestClosed(requestId);
+        if (block.timestamp > filed.expiresAt) revert RequestExpired(requestId);
+        if (block.timestamp <= filed.voteSnapshot) revert SnapshotNotReady(requestId, filed.voteSnapshot);
+        if (hasSupported[requestId][account]) revert AlreadySupported(account);
+        uint256 weight = IVotes(address(token)).getPastVotes(account, filed.voteSnapshot);
+        if (weight == 0) revert NoShares(account);
+        hasSupported[requestId][account] = true;
+        filed.supportVotes += weight;
+        emit ConveningSupported(requestId, account, weight);
     }
 
     function _checkInvitation(bytes32 invitationHash, string calldata invitationCid) private pure {

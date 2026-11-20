@@ -21,10 +21,15 @@ import { IGvShareModule, IGvTransferPermit } from "./interfaces/IGvSharePolicy.s
  * consideration escrowed up front, not a veto and not a wrapper-base swap.
  *
  * Drag-along. A buyer escrows the consideration token for `pricePerToken * totalSupply`. Holders
- * accept by escrowing shares. If the accepted shares reach the offer quorum before the deadline,
- * anyone may execute. After that, anyone may convert a remaining holder at the same price. Conversion
- * is the only forced move, it pays the stored buyer, and it is armed one transfer at a time.
- * There is no admin function that chooses an arbitrary recipient.
+ * accept by escrowing shares. The buyer's own holding counts as well, capped by the balance recorded
+ * at {postDrag} and by the live balance, so a later acquisition cannot inflate it and a later loss
+ * cannot keep counting shares the buyer no longer holds. The buyer cannot tender on top of that.
+ * If the sum reaches the offer quorum before the deadline, anyone may execute. The offer is then
+ * final and transfers of this token stay frozen. Each holder, or anyone on their behalf, pulls
+ * their consideration from escrow. {pushDrag} is a bounded push for a small cap table. After
+ * {GvCompanyRules.unclaimedWindow}, unclaimed consideration can be credited to the recipient the
+ * rules name, not to an address the caller chooses. There is no admin function that chooses an
+ * arbitrary share recipient. The shares always move to the stored buyer.
  *
  * Tag-along. A sale at or above the configured fraction of supply cannot settle on the pre-emption
  * path. The buyer escrows the price of the seller's stake plus the pro rata capacity of every other
@@ -50,6 +55,7 @@ contract GvAcquisition is GvEscrow, IGvShareModule, IGvTransferPermit {
         uint256 acceptedShares;
         uint256 paidOut;
         uint64 quorumReachedAt;
+        uint64 executedAt;
         bool executed;
         bool cancelled;
         bool surplusRefunded;
@@ -69,6 +75,9 @@ contract GvAcquisition is GvEscrow, IGvShareModule, IGvTransferPermit {
         bool settled;
         bool cancelled;
     }
+
+    /// @notice Upper bound on one {pushDrag} or {redirectUnclaimedBatch} call. A small cap table, not 5,000.
+    uint256 public constant MAX_PUSH = 32;
 
     GvShare public immutable token;
     GvCompanyRules public immutable rules;
@@ -109,6 +118,8 @@ contract GvAcquisition is GvEscrow, IGvShareModule, IGvTransferPermit {
     error CapExceeded(address holder, uint256 cap);
     error NothingToConvert(address holder);
     error NotExecuted(uint256 id);
+    error BatchBounds(uint256 length, uint256 max);
+    error UnclaimedRecipientUnset();
     error SharesOutstanding(uint256 id);
     error JoinsAlreadyMade(uint256 id);
     error SellerFraction(uint256 sellerBalance);
@@ -123,8 +134,13 @@ contract GvAcquisition is GvEscrow, IGvShareModule, IGvTransferPermit {
         uint16 quorumBps
     );
     event DragAccepted(uint256 indexed id, address indexed holder, uint256 amount, uint256 acceptedShares);
-    event DragExecuted(uint256 indexed id, uint256 acceptedShares, uint64 reachedAt);
-    event DragConverted(uint256 indexed id, address indexed holder, uint256 amount, uint256 cost);
+    event DragExecuted(uint256 indexed id, uint256 counted, uint256 buyerCounted, uint64 reachedAt);
+    event DragClaimed(
+        uint256 indexed id, address indexed holder, address indexed creditor, uint256 amount, uint256 cost
+    );
+    event DragUnclaimedRedirected(
+        uint256 indexed id, address indexed holder, address indexed recipient, uint256 amount, uint256 cost
+    );
     event DragCancelled(uint256 indexed id);
     event TagSaleOpened(
         uint256 indexed id,
@@ -160,6 +176,18 @@ contract GvAcquisition is GvEscrow, IGvShareModule, IGvTransferPermit {
 
     function permitsTransfer(address from, address to, uint256 amount) external view returns (bool) {
         return from == _allowFrom && to == _allowTo && amount == _allowAmount && amount != 0;
+    }
+
+    /// @notice Accepted shares plus the buyer's counted holding, and the quorum those must reach.
+    function dragQuorumProgress(uint256 id)
+        external
+        view
+        returns (uint256 counted, uint256 requiredShares, uint256 buyerCounted_)
+    {
+        Drag storage offer = _drags[id];
+        buyerCounted_ = _buyerCounted(offer);
+        counted = offer.acceptedShares + buyerCounted_;
+        requiredShares = _required(offer);
     }
 
     function mayForceTransfer(address from, address to, uint256 amount) external view returns (bool) {
@@ -203,6 +231,7 @@ contract GvAcquisition is GvEscrow, IGvShareModule, IGvTransferPermit {
         offer.supplyAtPost = supply;
         offer.buyerHeldAtPost = token.balanceOf(msg.sender);
         offer.escrowed = escrowed;
+        if (_quorumReached(offer)) offer.quorumReachedAt = uint64(block.timestamp);
         emit DragOfferPosted(id, msg.sender, currency, pricePerToken, escrowed, deadline, quorumBps);
     }
 
@@ -222,36 +251,75 @@ contract GvAcquisition is GvEscrow, IGvShareModule, IGvTransferPermit {
     function executeDrag(uint256 id) external {
         Drag storage offer = _drags[id];
         if (offer.buyer == address(0) || offer.executed || offer.cancelled) revert OfferClosed(id);
-        if (offer.quorumReachedAt == 0 || offer.quorumReachedAt > offer.deadline) {
-            revert QuorumNotReached(offer.acceptedShares, _required(offer));
+        if (offer.quorumReachedAt == 0 || offer.quorumReachedAt > offer.deadline || !_quorumReached(offer)) {
+            revert QuorumNotReached(offer.acceptedShares + _buyerCounted(offer), _required(offer));
         }
         if (token.totalSupply() != offer.supplyAtPost) revert SupplyChanged(offer.supplyAtPost, token.totalSupply());
         if (!terms.whitelisted(offer.buyer) || !terms.holdsCurrentSha(offer.buyer)) revert NotBuyer(offer.buyer);
         offer.executed = true;
-        emit DragExecuted(id, offer.acceptedShares, offer.quorumReachedAt);
+        offer.executedAt = uint64(block.timestamp);
+        emit DragExecuted(id, offer.acceptedShares + _buyerCounted(offer), _buyerCounted(offer), offer.quorumReachedAt);
     }
 
-    /// @notice Move one holder's remaining or escrowed shares to the buyer and credit the same price.
-    /// Permissionless after execution. The recipient is the stored buyer, not a caller-chosen address.
-    function convert(uint256 id, address holder) external nonReentrant {
+    /// @notice Pull one holder's consideration. Anyone may call. The currency is credited to `holder`.
+    /// Escrowed tenders and the free balance both move to the stored buyer, at the offer price.
+    function claimDrag(uint256 id, address holder) external nonReentrant {
         Drag storage offer = _drags[id];
         if (!offer.executed || offer.cancelled) revert NotExecuted(id);
-        if (holder == address(0) || holder == offer.buyer || holder == address(this)) revert NothingToConvert(holder);
-        uint256 escrowed = acceptedAmount[id][holder];
-        uint256 freeBalance = token.balanceOf(holder);
-        if (escrowed == 0 && freeBalance == 0) revert NothingToConvert(holder);
-        if (escrowed > 0) {
-            acceptedAmount[id][holder] = 0;
-            offer.acceptedShares -= escrowed;
-            _pay(offer, address(this), holder, escrowed);
+        (uint256 amount, uint256 cost) = _settle(offer, id, holder, holder);
+        emit DragClaimed(id, holder, holder, amount, cost);
+    }
+
+    /// @notice Bounded push for a small cap table. Same settlement as {claimDrag}. Empty holders are skipped.
+    function pushDrag(uint256 id, address[] calldata holders) external nonReentrant returns (uint256 settled) {
+        if (holders.length == 0 || holders.length > MAX_PUSH) revert BatchBounds(holders.length, MAX_PUSH);
+        Drag storage offer = _drags[id];
+        if (!offer.executed || offer.cancelled) revert NotExecuted(id);
+        for (uint256 i; i < holders.length; ++i) {
+            if (!_hasClaim(offer, id, holders[i])) continue;
+            (uint256 amount, uint256 cost) = _settle(offer, id, holders[i], holders[i]);
+            emit DragClaimed(id, holders[i], holders[i], amount, cost);
+            settled += 1;
         }
-        if (freeBalance > 0) _pay(offer, holder, holder, freeBalance);
+        if (settled == 0) revert NothingToConvert(address(0));
+    }
+
+    /**
+     * @notice After the rules' unclaimed window, credit one holder's consideration to {GvCompanyRules.unclaimedRecipient}
+     * and move the shares to the buyer. The caller does not choose the recipient. The holder can still
+     * {claimDrag} through the window, including the deadline second.
+     */
+    function redirectUnclaimed(uint256 id, address holder) external nonReentrant {
+        Drag storage offer = _drags[id];
+        if (!offer.executed || offer.cancelled) revert NotExecuted(id);
+        address recipient = _unclaimedReady(offer, id);
+        (uint256 amount, uint256 cost) = _settle(offer, id, holder, recipient);
+        emit DragUnclaimedRedirected(id, holder, recipient, amount, cost);
+    }
+
+    /// @notice Bounded form of {redirectUnclaimed}.
+    function redirectUnclaimedBatch(uint256 id, address[] calldata holders)
+        external
+        nonReentrant
+        returns (uint256 settled)
+    {
+        if (holders.length == 0 || holders.length > MAX_PUSH) revert BatchBounds(holders.length, MAX_PUSH);
+        Drag storage offer = _drags[id];
+        if (!offer.executed || offer.cancelled) revert NotExecuted(id);
+        address recipient = _unclaimedReady(offer, id);
+        for (uint256 i; i < holders.length; ++i) {
+            if (!_hasClaim(offer, id, holders[i])) continue;
+            (uint256 amount, uint256 cost) = _settle(offer, id, holders[i], recipient);
+            emit DragUnclaimedRedirected(id, holders[i], recipient, amount, cost);
+            settled += 1;
+        }
+        if (settled == 0) revert NothingToConvert(address(0));
     }
 
     function cancelDrag(uint256 id) external nonReentrant {
         Drag storage offer = _drags[id];
         if (offer.buyer == address(0) || offer.executed || offer.cancelled) revert OfferClosed(id);
-        if (offer.quorumReachedAt != 0) revert QuorumAlreadyReached(id);
+        if (_quorumReached(offer)) revert QuorumAlreadyReached(id);
         if (msg.sender != offer.buyer && block.timestamp <= offer.deadline) revert NotBuyer(msg.sender);
         offer.cancelled = true;
         if (activeDrag == id) activeDrag = 0;
@@ -376,8 +444,47 @@ contract GvAcquisition is GvEscrow, IGvShareModule, IGvTransferPermit {
         emit TagCancelled(id);
     }
 
-    function _pay(Drag storage offer, address from, address creditor, uint256 amount) private {
-        uint256 cost = Math.mulDiv(amount, offer.pricePerToken, 1);
+    function _unclaimedReady(Drag storage offer, uint256 id) private view returns (address recipient) {
+        recipient = rules.unclaimedRecipient();
+        if (recipient == address(0)) revert UnclaimedRecipientUnset();
+        uint64 end = offer.executedAt + rules.unclaimedWindow();
+        if (block.timestamp <= end) revert TooEarly(id, end);
+    }
+
+    /// @dev Snapshot at posting, capped by the live balance. Shares gained later do not count.
+    /// Shares the buyer no longer holds do not count. The buyer cannot also be in `acceptedShares`.
+    function _buyerCounted(Drag storage offer) private view returns (uint256) {
+        if (offer.buyer == address(0)) return 0;
+        uint256 live = token.balanceOf(offer.buyer);
+        return live < offer.buyerHeldAtPost ? live : offer.buyerHeldAtPost;
+    }
+
+    function _hasClaim(Drag storage offer, uint256 id, address holder) private view returns (bool) {
+        if (holder == address(0) || holder == offer.buyer || holder == address(this)) return false;
+        return acceptedAmount[id][holder] != 0 || token.balanceOf(holder) != 0;
+    }
+
+    function _settle(Drag storage offer, uint256 id, address holder, address creditor)
+        private
+        returns (uint256 amount, uint256 cost)
+    {
+        if (!_hasClaim(offer, id, holder)) revert NothingToConvert(holder);
+        uint256 escrowed = acceptedAmount[id][holder];
+        uint256 freeBalance = token.balanceOf(holder);
+        if (escrowed > 0) {
+            acceptedAmount[id][holder] = 0;
+            offer.acceptedShares -= escrowed;
+            cost = _pay(offer, address(this), creditor, escrowed);
+            amount = escrowed;
+        }
+        if (freeBalance > 0) {
+            cost += _pay(offer, holder, creditor, freeBalance);
+            amount += freeBalance;
+        }
+    }
+
+    function _pay(Drag storage offer, address from, address creditor, uint256 amount) private returns (uint256 cost) {
+        cost = Math.mulDiv(amount, offer.pricePerToken, 1);
         if (offer.paidOut + cost > offer.escrowed) revert EscrowShortfall(offer.currency);
         offer.paidOut += cost;
         _credit(creditor, offer.currency, cost);
@@ -385,7 +492,7 @@ contract GvAcquisition is GvEscrow, IGvShareModule, IGvTransferPermit {
     }
 
     function _quorumReached(Drag storage offer) private view returns (bool) {
-        return offer.acceptedShares >= _required(offer);
+        return offer.acceptedShares + _buyerCounted(offer) >= _required(offer);
     }
 
     function _required(Drag storage offer) private view returns (uint256) {
