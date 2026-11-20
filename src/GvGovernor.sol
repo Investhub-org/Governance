@@ -27,6 +27,12 @@ import { TimelockController } from "@openzeppelin/contracts/governance/TimelockC
  * Counting mode is `support=bravo&quorum=for,abstain`. For must be strictly greater than Against,
  * and For + Abstain must reach quorum. Against does not count toward quorum.
  *
+ * This contract is the execution gate. It is intentionally unchanged: one quorum numerator, the
+ * shape Tally indexes, and no dependency on {GvCompanyRules}. The articles' binding decision is
+ * {GvCompanyRules.canonicalOutcome}, which {GvAssembly.articlesOutcome} returns. A proposal can
+ * reach `Executed` here while that outcome says it did not pass. The rules' binding mode records
+ * which of the two formulas the articles adopt. It does not block this contract.
+ *
  * The clock is not hardcoded here. It follows the votes token. Kit tokens use `mode=timestamp`,
  * so delay and period are seconds. There is no owner. The executor is the timelock.
  *

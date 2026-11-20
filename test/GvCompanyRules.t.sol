@@ -31,6 +31,9 @@ contract GvCompanyRulesTest is Test {
         assertEq(rules.responseWindow(), rules.PLACEHOLDER_RESPONSE_WINDOW());
         assertEq(rules.recoveryDelay(), rules.PLACEHOLDER_RECOVERY_DELAY());
         assertEq(rules.recoverySignatures(), rules.PLACEHOLDER_RECOVERY_SIGNATURES());
+        assertEq(uint8(rules.bindingMode()), uint8(GvCompanyRules.BindingMode.Articles));
+        assertEq(rules.unclaimedWindow(), rules.PLACEHOLDER_UNCLAIMED_WINDOW());
+        assertEq(rules.unclaimedRecipient(), address(0));
         assertEq(rules.shareCapital(), 0);
         assertEq(rules.currencyCode(), bytes32("UNSET"));
         assertEq(rules.bandCount(), 0);
@@ -77,5 +80,27 @@ contract GvCompanyRulesTest is Test {
         assertFalse(rules.quorumMet(0, 100, 1));
         assertTrue(rules.meetsShareThreshold(10, 100, 1000));
         assertFalse(rules.meetsShareThreshold(9, 100, 1000));
+    }
+
+    function test_canonical_outcome_follows_the_binding_mode() public {
+        vm.expectRevert(abi.encodeWithSelector(GvCompanyRules.UnclaimedWindowOutOfRange.selector, uint64(30 days)));
+        rules.setUnclaimedWindow(30 days);
+        rules.setUnclaimedWindow(rules.MIN_UNCLAIMED_WINDOW());
+        assertEq(rules.unclaimedWindow(), rules.MIN_UNCLAIMED_WINDOW());
+
+        GvCompanyRules.ResolutionOutcome memory outcome =
+            rules.canonicalOutcome(GvCompanyRules.ResolutionClass.Qualified, 60, 40, 0, 100);
+        assertTrue(outcome.articlesQuorum);
+        assertFalse(outcome.articlesMajority);
+        assertTrue(outcome.bravoQuorum);
+        assertTrue(outcome.bravoMajority);
+        assertFalse(outcome.passed);
+
+        rules.setBindingMode(GvCompanyRules.BindingMode.Governor);
+        outcome = rules.canonicalOutcome(GvCompanyRules.ResolutionClass.Qualified, 60, 40, 0, 100);
+        assertTrue(outcome.passed);
+        rules.setBindingMode(GvCompanyRules.BindingMode.Both);
+        outcome = rules.canonicalOutcome(GvCompanyRules.ResolutionClass.Qualified, 60, 40, 0, 100);
+        assertFalse(outcome.passed);
     }
 }

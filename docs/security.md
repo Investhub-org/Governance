@@ -14,7 +14,7 @@ No contract in this repository was deployed to a live network as part of publish
 - The wrapper's `recover`. It is the timelock, and it must not be usable to seize tokens that holders deposited.
 - Timestamp-clock integration with `getPastVotes`. Proposer votes are read at `clock() - 1`.
 - `GvShare.moduleTransfer`. It skips the transfer policy. It must revert unless the caller is a module the timelock bound and that module reports the exact transfer as armed.
-- `GvAcquisition.convert` and `GvRecovery.executeRecovery`. They are the only intended callers of that force path. There should be no function that chooses an arbitrary recipient.
+- `GvAcquisition.claimDrag`, `pushDrag`, `redirectUnclaimed`, and `GvRecovery.executeRecovery`. They are the only intended callers of that force path. Drag shares move only to the stored buyer. Redirected currency goes only to the rules' recipient. There should be no function that chooses an arbitrary share recipient.
 - `GvShareTerms` whitelist and lock-up. The owner can block a transfer. The owner cannot seize a balance. Confirm ownership is the timelock before a live company relies on it.
 - Placeholder parameters. An audit should treat a shipped default as unreviewed software, not as a statutory figure.
 
@@ -32,10 +32,11 @@ No contract in this repository was deployed to a live network as part of publish
 - 5,000 claims pay the full allocation and the claim gas does not grow with the index.
 - On a Base fork, with `BASE_RPC_URL` set: propose, vote, queue, execute, fund canonical Base USDC, and claim. The fork test is skipped when the variable is unset.
 - An EGM convened by a director, and an EGM convened by a shareholder at the threshold and by holders combining support. The invitation event carries a hash and a CID, and the meeting cannot open during the notice.
-- `articlesOutcome` passes an ordinary majority and fails a qualified majority on the same votes.
+- `articlesOutcome` passes an ordinary majority and fails a qualified majority on the same votes. `bindingMode` `Governor` passes that qualified vote; `Both` fails it. The governor contract is not modified.
 - A publication and an information request become overdue, then stop being overdue once a hash is stored.
-- A recipient must be whitelisted and must have accepted the current SHA version. A lock-up blocks the holder until it expires. Pre-emption caps are pro rata. A stake at the tag threshold cannot use pre-emption.
-- A drag at the placeholder quorum converts every holder at the same price. Below quorum, the buyer is refunded and acceptors reclaim. A tag sale waits out its window and pays the same price pro rata.
+- A recipient must be whitelisted and must have accepted the current SHA version, including by a relayed EIP-712 signature or a Merkle proof that then stores the acceptance. A lock-up blocks the holder until it expires. A configured treasury transfer and a mint skip pre-emption and emit `PrimaryIssuance`. A peer transfer does not. Pre-emption caps are pro rata. A stake at the tag threshold cannot use pre-emption.
+- A drag at the placeholder quorum counts the buyer's snapshotted holding. A later balance increase does not raise that count. A later loss drops it. After execution, a holder pulls the same price, a batch push is capped at 32, and unclaimed consideration redirects only after the window and only to the configured recipient. Below quorum, the buyer is refunded and acceptors reclaim. A tag sale waits out its window and pays the same price pro rata.
+- Convening support past 64 holders uses a votes snapshot. A transfer after the snapshot cannot be counted twice.
 - Recovery cannot execute before the delay. The holder can cancel a board resolution and cannot cancel a court-order path. A stranger cannot call `moduleTransfer`. The timelock is the only address that can set the policy.
 
 ## Open decisions
@@ -60,9 +61,9 @@ These are choices, not leftovers. An audit should treat them as intended unless 
 | Directory | Self-asserted. It does not prove the factory deployed the listed contracts. The kit works with an empty directory. |
 | Leaf | `keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))))`, sorted pairs, odd nodes promoted. Same double hash as OpenZeppelin's `StandardMerkleTree`. |
 | Allowlist | None until the timelock sets a transfer policy. `GvShareTerms` then enforces a whitelist, SHA acceptance, lock-ups, and pre-emption. A CMTAT rule engine, if any, stays on the issuer's underlying token. |
-| Articles quorum | `GvGovernor` is unchanged and still has one quorum. `GvAssembly.articlesOutcome` applies the ordinary or qualified figures. The articles have to say which check governs. |
+| Articles quorum | `GvGovernor` is unchanged and still has one quorum. `articlesOutcome` returns `GvCompanyRules.canonicalOutcome`. `bindingMode` selects Articles, the governor's counting shape at the class basis points, or both. Execution on the governor is not blocked by that flag. |
 | Placeholders | `PLACEHOLDER_*` values are software defaults. They are not a reading of the PGR or the TVTG. |
-| Drag and tag | `GvAcquisition` has no owner. Drag converts holders only after an acceptance quorum, and only to the buyer who escrowed. Tag is an explicit sale, not every transfer. |
+| Drag and tag | `GvAcquisition` has no owner. The buyer's holding at posting counts toward the quorum, capped by the live balance. After execution each holder pulls the price, or a bounded push settles a small batch. Unclaimed currency redirects only to the rules' recipient, after the window. Shares move only to the buyer who escrowed. Tag is an explicit sale, not every transfer. |
 | Recovery | One delayed transfer, one hash, events. A board-resolution recovery can be cancelled by the holder. A court-order recovery cannot. The timelock can cancel either. The hash is not verified against a document. |
 | Force path | `moduleTransfer` cannot mint or burn. It calls the module's `mayForceTransfer` for that exact from, to, and amount. |
 | Factory shape | Five deployer contracts, then the factory, because one contract that embedded every creation code would exceed the EIP-3860 initcode limit. |

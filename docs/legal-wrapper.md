@@ -15,7 +15,13 @@ The intended wrapper, which counsel has to write in a form the register and a no
 3. The SHA names `shaHash` and `shaVersion` on `GvShareTerms`. The binding text is the off-chain document with that keccak256. A later version is binding only once published on-chain, and a recipient must accept the current version before the share token will mint or transfer shares to them.
 4. A hash on-chain is a commitment to a document that lives off-chain. The document should be encrypted if it is confidential. The chain does not see the plaintext and does not store an email address.
 
-A governor proposal that passes is a state change in the governor and, if it is executed, in the timelock. It is not automatically "passed under the articles." `GvAssembly.articlesOutcome` is a separate view. It applies the ordinary or qualified figures from `GvCompanyRules` to the votes the governor recorded. The governor itself still has one quorum, because that is the OpenZeppelin shape Tally indexes, and because `GvGovernor` was left unchanged so its size stays inside the limit that `docs/security.md` calls out. Counsel should say which of the two checks the articles adopt. A statute change that must be stricter than the governor's single quorum should be treated as passed only when `articlesOutcome` says so.
+`GvCompanyRules.canonicalOutcome` is the function the articles reference. `GvAssembly.articlesOutcome` calls it and does not keep a second formula. `passed` follows `bindingMode`:
+
+- `Articles` (the default). Participation (For + Against + Abstain) meets the class quorum. For exceeds the class majority of For + Against. Abstain is outside that majority denominator.
+- `Governor`. The same shape as the governor's counter: For + Abstain meets the class quorum, and For is strictly greater than Against. The basis points are the class rule, not the governor contract's single percent numerator.
+- `Both`. Both formulas have to succeed.
+
+`GvGovernor` is unchanged. It is the execution gate Tally indexes, with one quorum numerator for every proposal. It does not read the rules. A proposal can reach `Executed` there while `passed` is false. The binding mode records which check the articles adopt. It does not stop the timelock. A statute change that must be stricter than the governor's single quorum should be treated as passed only when `articlesOutcome` says `passed`.
 
 ## Placeholders
 
@@ -23,13 +29,15 @@ Every number `GvCompanyRules` stores at deployment is a **placeholder**. The con
 
 Software bounds are labeled as software bounds. The recovery delay cannot be set below seven days, so a compromised owner cannot turn the delay off. Seven days is not a claim about a statutory waiting period. A lawyer may require a longer one. The configurable default is thirty days, and that thirty days is also a placeholder.
 
+The unclaimed-drag window cannot be set below 180 days or above 1,825 days. Those are software bounds, not a statute. The placeholder default is 365 days. Until the owner sets `unclaimedRecipient`, the redirect does nothing and holders can keep claiming.
+
 ## Meetings
 
 `GvAssembly` records an AGM or an EGM.
 
 - A director can convene while `directorCount` is at least `requiredDirectors()`. If a capital band has raised the floor and the board is short, the board cannot convene. Shareholders still can, which is how a short board gets a meeting that can appoint directors.
-- One holder can convene when their balance meets `meetingCallThresholdBps` of supply, rounding the threshold up.
-- Holders under that fraction file a request and support it. At the moment of convening the contract re-reads balances, capped by what each person pledged, so shares that have moved no longer count.
+- One holder can convene when their current balance meets `meetingCallThresholdBps` of supply, rounding the threshold up. That path reads the live balance. One balance cannot be pledged twice. A flash loan of tokens can still meet it if transfers are open.
+- Holders under that fraction file a request. Support is each supporter's ERC-20 Votes weight at the second before the request was filed, added once into a running tally. There is no cap on the number of supporters. A transfer after the snapshot does not drop the original supporter and does not count for the recipient. Undelegated shares weigh zero, so they count as absent. The initiator is not counted until they support.
 - The notice period is copied onto the meeting. A later change to the rules does not shorten a notice already given. `openMeeting` reverts until `noticeDeadline`.
 - The agenda is stored on-chain: a short title, a document hash, and a resolution class. The invitation is a `bytes32` hash plus an optional CID of at most 128 bytes.
 
@@ -46,8 +54,11 @@ The contract has no field for a document body. Put the ciphertext at the CID. Ha
 Until the timelock calls `GvShare.setTransferPolicy`, the share token behaves as it did before this change. After the policy is set:
 
 - The recipient must be on the whitelist and must have `acceptedVersion == shaVersion`.
+- A holder records that acceptance by calling `acceptSha`, by signing the EIP-712 `AcceptSha(address account,uint256 version,bytes32 shaHash)` digest (domain name `GvShareTerms`, version `1`) so a relayer can submit it, or by a Merkle proof against the root the terms owner published for this version. The leaf is `keccak256(bytes.concat(keccak256(abi.encode(account, shaVersion, shaHash))))`, pairs are sorted, and an odd node is promoted. The signature is the holder's own proof. The root is the owner's list of accounts that accepted off-chain. Both paths write `acceptedVersion` and emit `ShaAccepted` for that account. A new SHA version clears the root.
+- The whitelist can be written in a batch of at most 64 accounts. The same bound applies to a batch of signatures or proofs.
 - A lock-up blocks that holder from starting a transfer until the timestamp.
-- If pre-emption is enabled, a direct peer transfer reverts. The seller escrows the shares for `preEmptionWindow`. Other holders may buy up to a pro rata cap at the same price per token unit. The cap is `offer * holderBalance / baseSupply`, with `baseSupply` equal to supply minus the seller's balance at the start. Integer division can leave a remainder. The original buyer takes what is left after the window, or the seller takes it back.
+- If pre-emption is enabled, a direct peer transfer reverts. A mint, and a transfer from the configured `issuerTreasury`, do not. They still require the recipient's whitelist entry and current SHA acceptance. A treasury transfer also requires the treasury itself to be whitelisted, to hold the current SHA, and not to be locked. `PrimaryIssuance` records each of those transfers. The event is how a later reader tells a primary issue from a peer transfer.
+- The seller escrows a pre-emption for `preEmptionWindow`. Other holders may buy up to a pro rata cap at the same price per token unit. The cap is `offer * holderBalance / baseSupply`, with `baseSupply` equal to supply minus the seller's balance at the start. Integer division can leave a remainder. The original buyer takes what is left after the window, or the seller takes it back.
 - A stake that meets `tagThresholdBps` cannot use pre-emption. It has to be opened as a tag sale.
 
 The whitelist is this token's list. It is not a copy of a CMTAT rule engine. A wrapped CMTAT keeps that engine on the underlying token.
@@ -58,7 +69,13 @@ The terms owner can freeze a transfer by taking someone off the whitelist or by 
 
 `GvAcquisition` has no owner.
 
-**Drag.** The buyer escrows the consideration token for `pricePerToken * totalSupply` and sets a quorum at least as high as `dragQuorumBps` (placeholder 7,500, meaning 75 percent). Holders accept by escrowing shares. If the accepted amount reaches the quorum before the deadline, anyone can execute. After that, anyone can `convert` a holder: escrowed shares and any balance still in the wallet move to the stored buyer, and the holder is credited the same price. There is no function that takes an arbitrary recipient. `moduleTransfer` on the share token only succeeds when the module has armed that exact transfer, and only the timelock can add a module. Peer transfers are paused while the offer is open so a minority cannot move the shares out from under the conversion. If the quorum is missed, the buyer withdraws the escrow and acceptors reclaim their shares.
+**Drag.** The buyer escrows the consideration token for `pricePerToken * totalSupply` and sets a quorum at least as high as `dragQuorumBps` (placeholder 7,500, meaning 75 percent). Holders accept by escrowing shares. The buyer's own holding counts toward that quorum. The count is the lesser of the balance recorded in `postDrag` and the buyer's live balance, so shares acquired after the offer do not inflate it and shares the buyer no longer holds drop out. The buyer cannot tender on top of that. This is what lets a buyer who already holds more than 25 percent still reach a 75 percent quorum: the other holders can accept the rest.
+
+Once that sum was reached before the deadline and `executeDrag` has run, the offer is final. Transfers of the token stay frozen until the buyer holds the whole supply. Anyone may `claimDrag` for a holder. The currency is credited to that holder, pro rata at the offer price, and the shares move to the stored buyer. `pushDrag` does the same for at most 32 holders in one call, for a small cap table. There is no function that sends the shares to an address the caller chooses.
+
+After `unclaimedWindow` (placeholder 365 days, and not on the deadline second itself), `redirectUnclaimed` credits a holder's unpaid consideration to `unclaimedRecipient` and still moves the shares to the buyer. The caller cannot pick a different recipient. If the recipient is unset, the redirect reverts and the holder can keep claiming. If the quorum is missed, or it was met and then the buyer's live balance falls below it before execution, the buyer can cancel and acceptors reclaim their shares. Peer transfers are paused from the moment the offer is posted.
+
+`moduleTransfer` on the share token only succeeds when the module has armed that exact transfer, and only the timelock can add a module. A bound recovery module can still move shares during a drag, because that path skips the transfer policy. Moving shares onto the buyer does not raise the snapshot. Moving them off the buyer can drop the quorum before execution.
 
 **Tag.** A sale at or above the threshold escrows the price of the seller's stake plus the maximum other holders could join. The join cap is the same fraction of each other holding that the seller is selling of their own holding. The sale can settle only after the window. Joining is a right, not a duty. Settlement without joiners is allowed once the window has run.
 
@@ -108,7 +125,7 @@ Their README says some files (the `EIP7702` folder, interfaces, `ERC20Flaggable`
 | --- | --- | --- | --- |
 | Share token | `Shares`, then a 1:1 SHA wrapper | Existing `GvShare` (ERC-20 votes, timestamp clock). Optional policy hook. | Their token code is BUSL or fee-bearing. The governor needs ERC-5805. The hook is off until the timelock sets it. |
 | SHA binding | Wrapper token. Holding the wrapper is holding the agreement. | `shaHash`, `shaVersion`, and `acceptSha` on `GvShareTerms`. Receiving shares requires the current version. | Reimplemented. The legal text stays off-chain. The chain stores the commitment and the acceptance. |
-| Drag-along | `offerAcquisition`. Veto for 20 days by the issuer or a holder above 10 percent of wrapped supply. At execution the buyer pays `price * totalSupply` and the wrapper's base becomes the currency. | Buyer escrows the full consideration first. Holders accept with shares. A configurable quorum (placeholder 75 percent) before the deadline converts every holder at the same price, one address at a time. | The veto-and-wrapper-swap code is BUSL and was not copied. The acceptance quorum and the up-front escrow are the behaviour this kit was asked to ship. The shared idea is the public one: one price, every holder, no silent admin transfer. |
+| Drag-along | `offerAcquisition`. Veto for 20 days by the issuer or a holder above 10 percent of wrapped supply. At execution the buyer pays `price * totalSupply` and the wrapper's base becomes the currency. | Buyer escrows the full consideration first. The buyer's existing holding counts toward the quorum, capped by the balance at posting. After the quorum, each holder pulls the same price from escrow. A push is bounded at 32 holders. | The veto-and-wrapper-swap code is BUSL and was not copied. The acceptance quorum, the up-front escrow, and the pull claim are the behaviour this kit was asked to ship. The shared idea is the public one: one price, every holder, no silent admin transfer. |
 | Tag-along | Their drag-along note says they do not automate tag-along, because a token transfer is not always a sale and the price is not on-chain. | An explicit sale. Below the threshold, pre-emption. At or above it, the same price must be open to other holders pro rata before settlement. | There was no tag-along implementation to reuse. The sale is a function call, not every `transfer`. |
 | Recovery | Holder-initiated claim, long delay, the holder can veto, the issuer can cancel. Their note cites a Swiss waiting-period analogy. | A director proposes. The call carries a hash of a board resolution or of a court order. Delay cannot be zero. The holder can cancel a board resolution only. | Their recovery code is BUSL. The path here is the one requested: board or court hash, events, delay, and no general admin transfer. |
 | Allowlist | `ERC20Allowlistable` (BUSL). | Boolean whitelist on `GvShareTerms`, set by the terms owner. | Reimplemented. |
@@ -120,7 +137,7 @@ Their README says some files (the `EIP7702` folder, interfaces, `ERC20Flaggable`
 1. For this AG, and separately for this GmbH, which PGR clauses and which articles actually set quorum, majority, notice, and who may convene? Replace every `PLACEHOLDER_*` value. Do not leave the software defaults in a live company.
 2. Can a GmbH membership interest be moved by an ERC-20 transfer at all, or does the PGR still require approval, a deed, or a notarial form that this call cannot replace?
 3. Does the TVTG token-container model require anything this deployment does not do (a prospectus, a physical validator, a VT service-provider registration, a particular register entry)?
-4. Is `acceptSha` a sufficient form of adherence to the SHA for a transferee, or do the articles and the SHA need a signed deed as well?
+4. Is an on-chain `acceptSha`, an EIP-712 signature relayed by the issuer, or inclusion in the issuer's Merkle root a sufficient form of adherence to the SHA, or do the articles and the SHA need a signed deed as well? The Merkle root is the owner's attestation. The signature is the holder's.
 5. Is the pre-emption cap (current balance over the seller's starting base, integer division, buyer excluded from the exercise and given the remainder) the pre-emption the SHA describes?
 6. Is the tag-along fraction "the same fraction of each other holding" the clause the shareholders want, or is it a right to sell their entire holding?
 7. Is 75 percent the drag quorum the SHA should state? The code will refuse a lower offer quorum than `dragQuorumBps`, but the stored figure is a placeholder.
@@ -129,7 +146,7 @@ Their README says some files (the `EIP7702` folder, interfaces, `ERC20Flaggable`
 10. Is the recovery delay long enough, and is an unverified keccak256 of a PDF an acceptable commitment to a board resolution or a court order? Who may cancel a court-order path?
 11. Should `GvCompanyRules`, `GvAssembly`, and `GvShareTerms` be owned by the timelock from the first day, so the issuer key cannot retune quorums, directors, or the whitelist?
 12. Do the information-request and publication windows match the company's Auskunftspflichten, and is a hash of ciphertext enough to perform them?
-13. The governor quorum and `articlesOutcome` are different checks. Which one do the articles adopt for an ordinary resolution, and which for a statute change?
+13. `bindingMode` defaults to `Articles`. `Governor` uses the governor's counting shape at the class basis points. `Both` requires both formulas. The governor contract can still execute a proposal the articles do not treat as passed. Which mode does this company adopt, and should the governor's percent numerator be set beside the class basis points?
 14. Undelegated shares do not show up in the governor's vote weights. Do the articles count them as absent?
 15. The Aktienbuch, tax, and stamp duty stay off-chain. Who writes the register entry after a transfer, a drag, or a recovery?
 

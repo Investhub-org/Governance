@@ -32,7 +32,7 @@ anvil --gas-limit 8000000000
 SIM_HOLDERS=32 forge script script/SimulateLifecycle.s.sol --rpc-url http://127.0.0.1:8545 -vv
 ```
 
-Anvil's default block gas limit is 30,000,000. The 32-holder script is one call of about 69,000,000 gas, and the 5,000-holder call is about 2,820,000,000, so the node has to be started with a higher limit. The in-memory `forge script` and `forge test` paths use the `gas_limit` in `foundry.toml` and do not need Anvil.
+Anvil's default block gas limit is 30,000,000. The 32-holder script is one call of about 71,000,000 gas, and the 5,000-holder call is about 1,980,000,000, so the node has to be started with a higher limit. The in-memory `forge script` and `forge test` paths use the `gas_limit` in `foundry.toml` and do not need Anvil.
 
 A Base fork reads the canonical USDC contract at `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (symbol and decimals, chain id 8453) and then runs the lifecycle with the mock token. The fork test uses 16 holders.
 
@@ -47,84 +47,96 @@ SIM_FORK=true BASE_RPC_URL=https://mainnet.base.org SIM_HOLDERS=16 forge script 
 
 InvestHub is an address in the book. It is never whitelisted, never a director, never a share module, and it holds none of the timelock roles. The factory keeps no admin role. The governor is the timelock's proposer, executor, and canceller. The timelock is its own default admin. The executor is the governor, not `address(0)`.
 
-Governor settings in the simulation are compressed so the vote can finish locally: voting delay 1 second, voting period 3,600 seconds, proposal threshold 1, quorum numerator 4 (4 percent), timelock delay 1 second. Assembly notice, the pre-emption window, the tag window, and the information response window stay on the placeholder durations and are crossed with `vm.warp`.
+Governor settings in the simulation are compressed so the vote can finish locally: voting delay 1 second, voting period 3,600 seconds, proposal threshold 1, quorum numerator 4 (4 percent), timelock delay 1 second. Assembly notice, the pre-emption window, the tag window, the information response window, the recovery delay, and the unclaimed-drag window stay on the placeholder durations and are crossed with `vm.warp`. `bindingMode` is set to `Articles`.
 
 The consideration token is `MockERC20("Simulation USD", "USDC", 6)`. It is minted inside the test. It is not Circle USDC.
 
 1. **Deploy.** The issuer deploys the five CREATE2 deployers and `GvKitFactory`, then an ownerless `GvDirectory`. `predict` matches `deploy`. The kit is the share (`Simulated Holdings`, `SIM`, 0 decimals, supply 1,000,000), the governor, the timelock, and the dividend. The issuer then deploys `GvCompanyRules`, `GvAssembly`, `GvInformation`, `GvShareTerms`, `GvAcquisition`, and `GvRecovery`, and points the terms at the acquisition contract. Salt is `keccak256("gv-sim-lifecycle-v1")`.
-2. **Issue.** The issuer publishes the SHA hash, appoints the human director, and appoints the timelock as a director so a later executed proposal can fulfill a publication. The issuer, the director, the pre-buyer, the tag buyer, the drag buyer, and every investor are whitelisted and each calls `acceptSha`. The issuer then transfers the book. The transfer policy is still unset, so those transfers are plain ERC-20 transfers. Investors 0 and 1 delegate to themselves, and the clock advances one second.
+2. **Issue.** The issuer publishes the SHA hash, appoints the human director, and appoints the timelock as a director so a later executed proposal can fulfill a publication. The issuer's wallet is set as `issuerTreasury`. Onboarding is 5,006 accounts: the 5,000 investors, the issuer, the director, the pre-buyer, the tag buyer, the drag buyer, and the recovered holder. InvestHub is not in that list. Whitelist writes go through `setWhitelistBatch` in batches of 64. SHA acceptance is a Merkle root of `keccak256(bytes.concat(keccak256(abi.encode(account, shaVersion, shaHash))))`, published by the issuer, then `acceptShaWithProofBatch` in the same batches. Each account's `acceptedVersion` is stored, and `ShaAccepted` is emitted per account. The synthetic addresses have no keys, so this run uses the Merkle path. The EIP-712 relay is covered by `test_batch_whitelist_merkle_acceptance_and_eip712_relay`. The issuer delegates, and an executed proposal calls `setTransferPolicy` while the issuer still holds the book. The issuer then transfers the book. Those transfers are treasury transfers: they skip pre-emption, they still require the whitelist and the current SHA, and each one emits `PrimaryIssuance`. A peer transfer from investor 3 reverts `PreEmptionRequired`. Investors 0 and 1 delegate to themselves, and the clock advances one second.
 3. **Merkle tree.** Leaves are `keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))))`, pairs are sorted, and an odd node is promoted. The amount is the share balance at issuance times `1_000_000` (one mock token per share). The tree is built before any secondary sale. Claims use that snapshot.
 4. **Handover.** The issuer registers the directory and transfers ownership of the rules, the terms, and the assembly to the timelock.
-5. **AGM.** The director schedules the annual-report publication and convenes a board AGM with three ordinary items: adopt the share terms, approve the annual report, approve the dividend. Investor 0 votes each proposal. The terms proposal calls `setTransferPolicy`, then `setShareModule` for the acquisition and for recovery. The report proposal calls `fulfillPublication`. The dividend proposal calls `startDistribution` with a 180-day claim deadline. The director closes the meeting. A peer transfer after this point reverts `PreEmptionRequired`.
+5. **AGM.** The director schedules the annual-report publication and convenes a board AGM with three ordinary items: adopt the share terms, approve the annual report, approve the dividend. Investor 0 votes each proposal. The terms proposal calls `setTransferPolicy`, then `setShareModule` for the acquisition and for recovery. The report proposal calls `fulfillPublication`. The dividend proposal calls `startDistribution` with a 180-day claim deadline. The director closes the meeting. The terms proposal sets the same policy again, then arms the acquisition and recovery modules. The peer-transfer check already ran at distribution.
 6. **Dividend.** The issuer approves and funds the epoch in full. Claims are submitted for indexes `0`, `1`, `n/2`, and `n-1`. Each claim pays the leaf account.
-7. **EGM.** Investor 0 holds 32 percent and convenes the EGM directly. The placeholder meeting-call threshold is 10 percent. The only item is qualified: appoint an observer as a director. Investors 0 and 1 both vote. Together they have 500,000 votes, which is the 50 percent qualified-quorum placeholder on a supply of 1,000,000. The convener closes the meeting.
+7. **EGM.** Investor 0 files a convening request and supports it. Support is that account's ERC-20 Votes weight at the second before the request, not a live balance and not a list capped at 64. Investor 0 already delegated and holds 320,000 votes, above the 10 percent placeholder, so one supporter is enough. A separate test convenes with 70 supporters. The only item is qualified: appoint an observer as a director. Investors 0 and 1 both vote. Together they have 500,000 votes, which is the 50 percent qualified-quorum placeholder on a supply of 1,000,000. The convener closes the meeting. `articlesOutcome.passed` is true under `BindingMode.Articles`. The governor proposal is `Executed`. On this vote both formulas pass. The unit test `test_articles_outcome_uses_the_resolution_class` is where a qualified majority fails the articles formula and passes the governor-shaped formula.
 8. **Information.** The last holder files a request for a share-register extract. The response deadline is the filing time plus the 30-day placeholder. The clock moves to one second past that deadline, anyone notifies the overdue request, and the director answers. The request is marked late.
-9. **Pre-emption.** Investor 2 (120,000 shares) offers 10,000 at the book price. That stake is under the 30 percent tag threshold, so `startPreEmption` accepts it. Investor 1 exercises 1,000. Their cap is `10,000 * 180,000 / 880,000 = 2,045`, and 1,000 sits inside it. After the 14-day window the pre-buyer settles the remaining 9,000.
-10. **Tag-along.** Investor 0 offers exactly 300,000 shares, which is the 30 percent tag threshold. `maxJoin` is `680,000 * 300,000 / 320,000 = 637,500`. The tag buyer escrows the price of the stake plus that cap. Investor 1 joins 1,000. After the window the sale settles and the joiner claims. The tag buyer and the drag buyer are different addresses: a buyer cannot accept their own drag, and the quorum below is measured against the full supply.
-11. **Drag-along.** The drag buyer starts with zero shares and escrows `price * totalSupply`. Seven holders tender 800,000 shares (the tag buyer, investors 0 through 4, and the pre-buyer), which clears the 75 percent placeholder. `executeDrag` runs, then `convert` for every remaining balance: 5,002 conversions at 5,000 holders (every investor, plus the pre-buyer and the tag buyer). Surplus is refunded. Investor 3 withdraws.
+9. **Recovery.** A director proposes a board-resolution recovery of investor 6's whole balance to the recovered holder, with the hash of placeholder minutes. The clock moves to the 30-day placeholder. `executeRecovery` runs. Investor 6 holds nothing. The recovered holder holds that balance, is whitelisted, and has accepted the SHA. The order hash is not checked against a file.
+10. **Pre-emption.** Investor 2 (120,000 shares) offers 10,000 at the book price. That stake is under the 30 percent tag threshold, so `startPreEmption` accepts it. Investor 1 exercises 1,000. Their cap is `10,000 * 180,000 / 880,000 = 2,045`, and 1,000 sits inside it. After the 14-day window the pre-buyer settles the remaining 9,000.
+11. **Tag-along.** Investor 0 offers exactly 300,000 shares, which is the 30 percent tag threshold. `maxJoin` is `680,000 * 300,000 / 320,000 = 637,500`. The tag buyer escrows the price of the stake plus that cap. Investor 1 joins 1,000. After the window the sale settles and the joiner claims. The tag buyer then holds 301,000 shares.
+12. **Drag-along.** The tag buyer is the buyer. They already hold 301,000, which is more than 25 percent, so the other 699,000 shares cannot reach a 75 percent quorum on their own. `postDrag` records `buyerHeldAtPost`. The buyer cannot tender. Investors 0 through 4 and the pre-buyer tender 499,000. Counted support is `499,000 + 301,000 = 800,000`, against a required 750,000. `executeDrag` finalises the offer and freezes transfers. The test contract calls `claimDrag` for seven accounts (investors 0 through 4, the pre-buyer, and the recovered holder). `pushDrag` settles the next 32 holders, which is the batch cap. Investor 7's peer transfer reverts `TransferWindowOpen`. Investor 3 withdraws. The clock then moves past the 365-day unclaimed window, and `redirectUnclaimed` credits the last holder's consideration to the reserve address. The other holders are not pushed. They still hold shares, those shares cannot move, and their consideration stays in escrow until someone claims it. Surplus is not refunded, because the buyer does not yet hold the supply.
 
-The closing assertions: the drag buyer holds the whole supply, the supply is unchanged, the acquisition contract and the terms contract and the issuer and the InvestHub address hold no shares, `paidOut` equals the escrow, and every investor's share balance is zero. Proceeds match the sales. Investor 0's acquisition proceeds equal the original 320,000 shares times the price (tag stake plus the drag of the remainder). Investor 1's acquisition proceeds are 181,000 times the price (the 1,000 bought in the pre-emption, then sold, plus the original 180,000). Investor 2 has 10,000 times the price on the terms contract and 110,000 times the price on the acquisition contract. Investor 3 is outside the claim sample, so after the withdrawal their wallet is exactly 100,000 times the price and their escrowed proceeds are zero. The tag buyer's recorded proceeds are 937,500 times the price: the unused tag escrow credited back, plus the drag price of the 301,000 shares they held. A conservation check sums the mock balances of the claimed wallets, the dividend contract, the terms contract, and the acquisition contract.
+The closing assertions: supply is unchanged, the acquisition contract and the terms contract and the issuer and the InvestHub address and the unused drag-buyer role hold no shares, the offer is executed, transfers are still frozen, and `paidOut` is less than the escrow. Investor 0's acquisition proceeds equal the original 320,000 shares times the price (tag stake plus the drag of the remainder). Investor 1's acquisition proceeds are 181,000 times the price (the 1,000 bought in the pre-emption, then sold, plus the original 180,000). Investor 2 has 10,000 times the price on the terms contract and 110,000 times the price on the acquisition contract. Investor 3 is outside the dividend sample, so after the withdrawal their wallet is exactly 100,000 times the price and their escrowed proceeds are zero. Investor 6's shares were recovered, so their drag proceeds are on the recovered holder. Investor 7 still holds their book balance and has no drag proceeds. The tag buyer's recorded proceeds are 636,500 times the price: the unused tag escrow credited back, and nothing for the 301,000 shares they already held, because a buyer is not paid for their own shares. The reserve's proceeds equal the last holder's book balance times the price. A conservation check sums the mock balances of the claimed wallets, the dividend contract, the terms contract, and the acquisition contract.
 
-Recovery is deployed and armed as a share module. The run does not execute a recovery. The placeholder delay is 30 days, with a 7-day floor.
+The placeholder recovery delay is 30 days, with a 7-day floor. The run executes one board-resolution recovery before the pre-emption.
 
 ## Gas
 
 Figures are `vm.lastFrameGas().gasTotalUsed`: execution gas of that call, before refunds, including nested calls. Cheatcode calls are not included. A later call sees warm accounts. The 21,000 intrinsic transaction cost is not included. The same method is what the 5,000-holder dividend test in the README uses for its claim lines. Those README lines are a different address set (`address(uint160(0xA000 + i))`) measured in a dividend-only test. The numbers below are the lifecycle.
 
-Foundry 1.9.0, solc 0.8.28, optimizer 200, EVM prague. `SIM_HOLDERS=5000`, one `simulate` call. `vm.unixTime` reported 39,643 ms from the start of `simulate` to the final log. The test process reported 42.08 s of CPU. The Foundry test-call gas, which also counts the Merkle copy, the mock mints, and the closing assertions, was 2,818,661,383. `foundry.toml` sets `gas_limit` to 8,000,000,000 because that single call does not fit in 2,000,000,000.
+Foundry 1.9.0, solc 0.8.28, optimizer 200, EVM prague. `SIM_HOLDERS=5000`, one `simulate` call. `vm.unixTime` reported 8,357 ms from the start of `simulate` to the final log. The test process reported 8.38 s of CPU. The Foundry test-call gas was 1,979,792,332. `gasleft()` across `simulate`, which also counts the SHA Merkle build, the dividend Merkle copy, the mock mints, and the closing assertions, was 1,980,334,108. `foundry.toml` keeps `gas_limit` at 8,000,000,000. The previous run's test-call gas was 2,818,661,383 and its `vm.unixTime` was 39,643 ms.
 
-Metered total: **1,686,792,901**.
+Metered total: **893,478,059**, against **1,686,792,901** before these paths. The drop is the drag phase. The issue phase rose, because the book is now transferred under the policy.
 
-| Phase | Gas |
-| --- | --- |
-| Deploy | 38,275,952 |
-| Issue | 780,753,584 |
-| AGM | 2,476,712 |
-| Dividend | 634,893 |
-| EGM | 879,837 |
-| Information | 281,190 |
-| Pre-emption | 992,749 |
-| Tag-along | 1,311,102 |
-| Drag-along | 861,186,882 |
+| Phase | Before | After |
+| --- | --- | --- |
+| Deploy | 38,275,952 | 40,140,350 |
+| Issue | 780,753,584 | 839,014,674 |
+| AGM | 2,476,712 | 2,456,846 |
+| Dividend | 634,893 | 634,893 |
+| EGM | 879,837 | 1,288,272 |
+| Information | 281,190 | 281,257 |
+| Recovery | not run | 412,275 |
+| Pre-emption | 992,749 | 992,871 |
+| Tag-along | 1,311,102 | 1,311,102 |
+| Drag-along | 861,186,882 | 6,945,519 |
+| Total | 1,686,792,901 | 893,478,059 |
 
-Deploy breaks down as infrastructure 16,317,323, kit `deploy` 8,568,357, and the terms stack 13,390,272.
+Deploy breaks down as infrastructure 16,317,755, kit `deploy` 8,568,565, and the terms stack 15,254,030. The kit `deploy` figure is the governor, the share, the timelock, and the dividend. It did not move. The terms stack grew by the EIP-712 acceptance, the batches, and the pull claim.
 
-The issue and drag phases are the ones that grow with the holder count.
+The calls that used to grow per holder, and what they cost now. Onboarding is 5,006 accounts (5,000 investors plus six roles). The previous whitelist and `acceptSha` totals are the 5,000 investor calls only. Distribution is 5,000 transfers. The previous drag line is 5,002 `convert` calls.
 
-| Call, 5,000 investors | First | Last | Average | Total |
-| --- | --- | --- | --- | --- |
-| `setWhitelist` | 47,930 | 47,930 | 47,929 | 239,645,092 |
-| `acceptSha` | 49,616 | 49,616 | 49,616 | 248,080,000 |
-| Share `transfer` of the book | 58,439 | 58,427 | 58,426 | 292,131,220 |
-| Drag `convert` (5,002 calls) | 199,001 | 164,801 | 171,743 | 859,062,629 |
+| Call | Before, total | After, total | After, first batch or call | After, last | After, average |
+| --- | --- | --- | --- | --- | --- |
+| Whitelist | 239,645,092 | 123,900,813 (79 batches) | 1,583,825 | 365,499 | 24,750 |
+| SHA acceptance | 248,080,000 | 182,828,652 (79 batches) | 2,356,976 | 483,556 | 36,521 |
+| Share `transfer` of the book | 292,131,220 | 531,258,480 | 128,520 | 106,248 | 106,251 |
+| Drag settlement | 859,062,629 | 6,945,519 for the whole phase | one claim 184,744 | push of 32: 3,580,100 | does not walk the book |
 
-`convert` includes the pre-buyer and the tag buyer, so the count is 5,002. The first call pays the cold write. Later calls stay near 165,000.
+A treasury transfer is an external call into the terms contract plus a `PrimaryIssuance` log. That is why the per-transfer average moved from 58,426 to 106,251. The policy was the point of the change. The previous figure is an unregulated ERC-20 transfer, taken before `setTransferPolicy`.
 
-Governance and the dividend do not grow with the holder count. The AGM subtotal is the same 2,476,712 at 32 holders and at 5,000.
+The drag phase at 5,000 holders is 6,945,519. At 32 holders it is 5,738,645. The difference is a push of 32 holders against a push of 21. Seven claims, one execution, and one redirect are the same size at both counts. The phase no longer walks the cap table.
+
+Governance, the dividend, and the EGM do not grow with the holder count. The AGM subtotal is 2,456,846 at 32 holders and at 5,000. The EGM subtotal is 1,288,272 at both, up from 879,837 because the request path is a file, a support, and a convene.
 
 | Call | Gas |
 | --- | --- |
-| Publish SHA and appoint both directors | 218,558 |
-| Delegate the two founders | 190,984 |
-| Directory register and ownership handover | 247,044 |
-| Convene the AGM | 353,672 |
-| AGM terms `propose` / `bind` / `vote` / `queue` / `execute` | 87,668 / 64,734 / 83,037 / 163,741 / 180,426 |
+| Publish SHA, appoint both directors, set the treasury | 269,904 |
+| Publish the SHA acceptance root | 52,360 |
+| Adopt the transfer policy: `propose` / `vote` / `queue` / `execute` | 75,701 / 83,037 / 144,525 / 114,720 |
+| Delegate the issuer, then the two founders | 95,498 + 190,984 |
+| Directory register and ownership handover | 247,034 |
+| Convene the AGM | 353,650 |
+| AGM terms `propose` / `bind` / `vote` / `queue` / `execute` | 87,668 / 64,756 / 83,037 / 163,741 / 160,526 |
 | AGM report `execute` | 156,969 |
 | AGM dividend `execute` (`startDistribution`) | 237,168 |
 | Approve and `fund` the epoch | 46,342 + 122,825 |
 | `claim` index 0 / 1 / 2,500 / 4,999 | 134,671 / 100,481 / 117,535 / 113,039 |
-| Convene the EGM | 259,036 |
-| EGM `execute` (`setDirector`) | 126,079 |
-| File the information request | 147,427 |
+| File the convening request / support it / convene | 263,227 / 83,682 / 320,562 |
+| EGM `execute` (`setDirector`) | 126,057 |
+| File the information request | 147,494 |
 | Answer it, late | 105,507 |
-| `startPreEmption` / `exercisePreEmption` / `settle` | 329,500 / 308,659 / 215,554 |
-| `openTagSale` / `joinTag` / `settleTag` / `claimTag` | 494,970 / 236,263 / 265,213 / 175,574 |
-| `postDrag` | 255,073 |
-| Seven `acceptDrag` calls | 1,317,566 |
-| `executeDrag` | 53,743 |
-| `refundDragSurplus` | 54,763 |
+| Propose recovery / execute it | 226,218 / 186,057 |
+| `startPreEmption` / `exercisePreEmption` / `settle` | 329,554 / 308,704 / 215,577 |
+| `openTagSale` / `joinTag` / `settleTag` / `claimTag` | 494,899 / 236,308 / 265,215 / 175,598 |
+| `postDrag` | 279,682 |
+| Seven `acceptDrag` calls | 1,173,688 |
+| `executeDrag` | 63,935 |
+| Seven `claimDrag` calls, first call | 1,267,025, first 184,744 |
+| `pushDrag` of 32 holders | 3,580,100 |
+| `redirectUnclaimed` | 184,270 |
 
-The 32-holder CI run metered 58,704,789 gas and reported 15 ms. Same phases, with whitelist, acceptance, distribution, and `convert` scaled down to 32 investors (34 conversions, including the two buyers).
+The 32-holder CI run metered 59,803,078 gas and reported 16 ms. The previous 32-holder metered total was 58,704,789. The new run adds the policy proposal, the Merkle root, the recovery, and the request-path EGM, and it no longer converts the whole book.
+
+The dividend root for this book is `0x098768e46dacb10756e71a1765b986e2a851fd4c8e3cd0f306d6e9e8d0d019a9`. It is unchanged. The allocation is unchanged.
 
 At 5,000 holders the smallest tail allotment is 4 shares. The head is fixed: 320,000, 180,000, 120,000, 100,000, 80,000. The other 200,000 shares follow `1_000_000 / (rank + 1)`, and the remainder is applied to the largest tail holder. Eight holders is the minimum the book accepts. Python and `InvestorBook.allocate` use the same integer division.
 
@@ -154,15 +166,26 @@ The contracts do not call InvestHub. The tools below are the product surface a r
 | Start or fund a `GvDividend` epoch | none | No tool calls `startDistribution` or `fund`. |
 | Claim | `get_claimable`, `prepare_claim` | Read `getClaimable` and build an unsigned `withdraw` on the dividend pack the deals page documents, or on the pack selected with `gv_id` `gv-e2e-iht-test`. That calldata is not `GvDividend.claim(epoch, index, account, amount, proof)`. |
 
-## Gaps this run ran into
+## What this run now exercises
 
-These are observations from driving the contracts on `main` (`1f247378`, the articles and shareholder-terms change). The simulation works around them. The contracts are unchanged.
+The previous run worked around eight gaps. This run uses the contract paths.
 
-1. **`buyerHeldAtPost` is stored and never read.** `postDrag` writes `token.balanceOf(msg.sender)` onto the offer. `_required` is `ceil(supplyAtPost * quorumBps / 10_000)` of accepted shares. `acceptDrag` reverts `BuyerCannotAccept` for the buyer, so shares the buyer already holds cannot be tendered and do not count. A buyer who already holds more than 25 percent cannot reach a 75 percent quorum measured against the full supply. The drag buyer in this run starts at zero. The tag buyer is a different address for the same reason.
-2. **A treasury transfer after the policy is on reverts `PreEmptionRequired`.** `authorizeTransfer` lets a mint (`from == address(0)`) through after the recipient checks, unless a sale is blocking transfers. Any other transfer, including one from the issuer's own balance, hits pre-emption while `preEmptionEnabled` is true, which is the default. This run distributes the book before `setTransferPolicy`. A later issuance is a timelock `mint`, not a transfer out of a treasury wallet.
-3. **Whitelist and `acceptSha` are one account per call.** Five thousand holders is five thousand of each. That is most of the 780,753,584 gas in the issue phase. There is no batch entry point.
-4. **The factory CREATE2-deploys four contracts.** Share, timelock, governor, and dividend. Rules, assembly, information, terms, acquisition, and recovery are separate issuer deployments. That split is the EIP-3860 initcode limit described in the README, and `DeployIssuerTerms` already follows it.
-5. **There is no subscribe or commit contract in this kit.** The commitment column in the book is `shares * price`. It is not an on-chain escrow.
-6. **Governor quorum and `articlesOutcome` answer different questions.** The governor's quorum numerator counts For and Abstain against past supply. `articlesOutcome` compares participation (For + Against + Abstain) with the class quorum in basis points, and compares For with For + Against for the class majority. Abstentions are outside that majority denominator. A proposal can be `Executed` and still fail `articlesOutcome`. This run asserts both.
-7. **A convening request stops at 64 supporters.** `GvAssembly.MAX_SUPPORTERS` is 64. Sixty-four equal holders out of 5,000 are about 1.28 percent of supply, under the 10 percent meeting-call placeholder, so that path cannot convene a dispersed book. This run does not use the request path. Investor 0 convenes the EGM because their balance clears the threshold on its own.
-8. **Recovery is armed and not exercised.** `GvRecovery` is a share module by the end of the AGM. The 30-day delay is outside the path this simulation was asked to walk.
+1. The tag buyer is the drag buyer and holds 301,000 shares. `buyerHeldAtPost` counts, capped by the live balance. Counted support is 800,000 against a required 750,000. A buyer cannot tender, so those shares are not counted twice. A recovery onto the buyer after posting does not raise the snapshot. A recovery off the buyer drops the live count, and `executeDrag` checks the quorum again.
+2. The book is transferred after `setTransferPolicy`, from the configured `issuerTreasury`. Each transfer emits `PrimaryIssuance`. A peer transfer reverts `PreEmptionRequired`.
+3. Whitelist and SHA acceptance are batches of 64. The SHA path in this run is a Merkle proof. `acceptedVersion` is stored per account. EIP-712 `acceptShaBySig` is the holder-signed alternative and is unit-tested with a real key. These synthetic addresses have no keys.
+4. The EGM uses a convening request. Support is `getPastVotes` at the second before the request. There is no supporter cap. `test_convening_support_scales_past_sixty_four_holders` convenes with 70 accounts.
+5. `articlesOutcome` returns `GvCompanyRules.canonicalOutcome`. `bindingMode` is `Articles`. The governor contract is unchanged. This vote passes both formulas. A different vote, in the unit test, passes the governor-shaped formula and fails the articles formula.
+6. Recovery is proposed and executed. Investor 6's balance moves to the recovered holder.
+
+## What is still open
+
+1. **The factory CREATE2-deploys four contracts.** Share, timelock, governor, and dividend. Rules, assembly, information, terms, acquisition, and recovery are separate issuer deployments. That split is the EIP-3860 initcode limit described in the README.
+2. **There is no subscribe or commit contract in this kit.** The commitment column in the book is `shares * price`. It is not an on-chain escrow.
+3. **The governor can execute while `passed` is false.** `bindingMode` records which formula the articles use. It does not block the timelock. `GvGovernor` is unchanged: one quorum numerator, the OpenZeppelin counting shape, and the bytecode size limit. Aligning the numbers means setting that numerator beside `quorumBps / 100`. The governor still has one numerator for every class.
+4. **`conveneByShareholders` still uses the live balance.** A flash loan can convene on that path while transfers are open. The request path is the checkpointed one. This run uses the request path.
+5. **A matured recovery can move shares during a frozen drag.** `moduleTransfer` skips the transfer policy. Shares moved onto the buyer do not raise `buyerHeldAtPost`. Shares moved off the buyer can drop the quorum before `executeDrag`. After execution, a recovery changes who can claim.
+6. **A Merkle acceptance is the issuer's root.** The on-chain record is still `acceptedVersion` on the account. It is not a signature by the holder. The EIP-712 path is the holder's proof. This run sets the root before ownership moves to the timelock.
+7. **Unclaimed drag consideration stays in the contract** until a claim or a redirect. Redirect pays the recipient configured on the company rules, not the holder. The placeholder window is 365 days. The software floor is 180 days and the cap is 1,825 days. Those bounds are not a statute.
+8. **Primary distribution is still one transfer per holder.** The policy call and the `PrimaryIssuance` log are why that phase is larger than the unregulated transfers in the previous table. There is no batched ERC-20 distribution.
+9. **The 5,000-holder drag does not settle the whole cap table.** Seven claims, one push of 32, and one redirect. The remaining holders keep frozen shares and unclaimed consideration. That is the pull model. `pushDrag` reverts above 32.
+10. **Undelegated shares are absent** from governor weights and from convening-request support. `conveneByShareholders` counts the live ERC-20 balance, including undelegated shares.

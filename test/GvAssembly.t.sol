@@ -94,11 +94,16 @@ contract GvAssemblyTest is Test {
         assertEq(uint8(assemblyGv.agendaItem(id, 0).class), uint8(GvCompanyRules.ResolutionClass.Qualified));
     }
 
-    function test_shareholders_below_the_threshold_convene_by_combining_support() public {
+    function test_support_is_a_votes_snapshot_and_does_not_double_count() public {
         vm.prank(issuer);
         share.transfer(alice, 6);
         vm.prank(issuer);
         share.transfer(bob, 6);
+        vm.prank(alice);
+        share.delegate(alice);
+        vm.prank(bob);
+        share.delegate(bob);
+        vm.warp(block.timestamp + 1);
 
         vm.prank(alice);
         uint256 requestId = assemblyGv.fileConveningRequest(
@@ -108,18 +113,48 @@ contract GvAssemblyTest is Test {
             _one("Information", GvCompanyRules.ResolutionClass.Ordinary)
         );
         vm.prank(alice);
+        assemblyGv.supportConveningRequest(requestId);
+        vm.prank(alice);
         share.transfer(stranger, 6);
+        vm.prank(stranger);
+        vm.expectPartialRevert(GvAssembly.NoShares.selector);
+        assemblyGv.supportConveningRequest(requestId);
+        assertEq(assemblyGv.supportOf(requestId), 6);
+        assertTrue(assemblyGv.hasSupported(requestId, alice));
+
         vm.prank(bob);
         assemblyGv.supportConveningRequest(requestId);
-        vm.expectPartialRevert(GvAssembly.ThresholdNotMet.selector);
-        assemblyGv.conveneFromRequest(requestId);
-
-        vm.prank(stranger);
-        share.transfer(alice, 6);
         uint256 id = assemblyGv.conveneFromRequest(requestId);
+        assertEq(assemblyGv.supportOf(requestId), 12);
+        assertEq(share.balanceOf(alice), 0);
         assertEq(assemblyGv.meeting(id).convener, alice);
         assertFalse(assemblyGv.meeting(id).convenedByBoard);
         assertEq(assemblyGv.request(requestId).meetingId, id);
+    }
+
+    function test_convening_support_scales_past_sixty_four_holders() public {
+        uint256 supporters = 70;
+        for (uint256 i; i < supporters; ++i) {
+            address account = address(uint160(0xA000 + i));
+            vm.prank(issuer);
+            share.transfer(account, 1);
+            vm.prank(account);
+            share.delegate(account);
+        }
+        vm.warp(block.timestamp + 1);
+        address first = address(uint160(0xA000));
+        vm.prank(first);
+        uint256 requestId = assemblyGv.fileConveningRequest(
+            GvCompanyRules.MeetingType.EGM, INVITATION, CID, _one("Scale", GvCompanyRules.ResolutionClass.Ordinary)
+        );
+        for (uint256 i; i < supporters; ++i) {
+            vm.prank(address(uint160(0xA000 + i)));
+            assemblyGv.supportConveningRequest(requestId);
+        }
+        assertEq(assemblyGv.supportOf(requestId), supporters);
+        uint256 id = assemblyGv.conveneFromRequest(requestId);
+        assertEq(assemblyGv.meeting(id).convener, first);
+        assertFalse(assemblyGv.meeting(id).convenedByBoard);
     }
 
     function test_agm_uses_its_own_notice_and_a_short_board_cannot_convene() public {
@@ -187,15 +222,25 @@ contract GvAssemblyTest is Test {
         vm.prank(alice);
         assemblyGv.bindProposal(meetingId, 1, proposalId);
 
-        (bool ordinaryQuorum, bool ordinaryMajority,,,,) = assemblyGv.articlesOutcome(meetingId, 0, proposalId);
-        (bool qualifiedQuorum, bool qualifiedMajority, uint256 forVotes, uint256 againstVotes,,) =
-            assemblyGv.articlesOutcome(meetingId, 1, proposalId);
-        assertEq(forVotes, 60);
-        assertEq(againstVotes, 40);
-        assertTrue(ordinaryQuorum);
-        assertTrue(ordinaryMajority);
-        assertTrue(qualifiedQuorum);
-        assertFalse(qualifiedMajority);
+        GvCompanyRules.ResolutionOutcome memory ordinary = assemblyGv.articlesOutcome(meetingId, 0, proposalId);
+        GvCompanyRules.ResolutionOutcome memory qualified = assemblyGv.articlesOutcome(meetingId, 1, proposalId);
+        assertEq(qualified.forVotes, 60);
+        assertEq(qualified.againstVotes, 40);
+        assertTrue(ordinary.articlesQuorum);
+        assertTrue(ordinary.articlesMajority);
+        assertTrue(ordinary.passed);
+        assertTrue(qualified.articlesQuorum);
+        assertFalse(qualified.articlesMajority);
+        assertTrue(qualified.bravoQuorum);
+        assertTrue(qualified.bravoMajority);
+        assertFalse(qualified.passed);
+
+        rules.setBindingMode(GvCompanyRules.BindingMode.Governor);
+        qualified = assemblyGv.articlesOutcome(meetingId, 1, proposalId);
+        assertTrue(qualified.passed);
+        rules.setBindingMode(GvCompanyRules.BindingMode.Both);
+        qualified = assemblyGv.articlesOutcome(meetingId, 1, proposalId);
+        assertFalse(qualified.passed);
     }
 
     function test_information_request_starts_a_clock_and_overdue_items_are_queryable() public {

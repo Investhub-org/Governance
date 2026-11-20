@@ -8,7 +8,7 @@ This is an English clause list for the shareholder agreement (SHA) of **[company
 
 The SHA is the document with keccak256 **[hash]**. The company publishes that hash on the share-terms contract at **[GvShareTerms address]**. The published version number is the SHA version.
 
-A later text is a new version only when its hash is published. Holders who want to receive further shares accept the current version by calling `acceptSha` on that contract. While the share token's transfer policy points at the share-terms contract, the token rejects a mint or a transfer to an address that has not accepted the current version or is not on the whitelist.
+A later text is a new version only when its hash is published. Holders who want to receive further shares accept the current version on that contract: by calling `acceptSha`, by signing the EIP-712 acceptance digest so the company can relay it, or by a Merkle proof against the root the company published for that version. The chain stores the acceptance on the holder's account either way. While the share token's transfer policy points at the share-terms contract, the token rejects a mint or a transfer to an address that has not accepted the current version or is not on the whitelist. A mint, and a transfer from the treasury address the company has configured, are not a pre-emption. They still require the whitelist, the current acceptance, and, for the treasury, any lock-up on that wallet. Each of those transfers emits `PrimaryIssuance`.
 
 The parties agree that **[on-chain acceptance is / is not]** enough to bind a transferee, and that **[a deed / a board approval / nothing further]** is also required. Counsel fills this in. For a GmbH interest, counsel states any form the PGR still requires. This draft does not waive it.
 
@@ -22,7 +22,7 @@ Locked shares cannot be offered in pre-emption or in a tag-along sale. **[They c
 
 ## Pre-emption
 
-A transfer that is not a tag-along sale and not a drag-along is offered to existing holders for the pre-emption window stored in the company-rules contract, at the price per token unit stated in the offer.
+A peer transfer that is not a tag-along sale and not a drag-along is offered to existing holders for the pre-emption window stored in the company-rules contract, at the price per token unit stated in the offer. A mint and a transfer from the configured treasury address are not that offer.
 
 Each other holder may take up to `offered amount * their balance / (supply - seller's balance at the start)`. The original buyer does not exercise that cap. After the window, the buyer may take the remainder at the same price, or the seller may take the unsold shares back. Integer division can leave a single unit in the remainder. The parties accept that rounding.
 
@@ -40,7 +40,7 @@ The offer is the same price per token unit. Each other holder may sell up to the
 
 A buyer may post an offer on the acquisition contract by escrowing the consideration token for the price times the entire supply. The price is the same for every share. The quorum is at least the drag-along quorum stored in the company-rules contract. The placeholder in the software is 75 percent. The figure in this SHA is **[ ] percent**, and the company stores that figure before anyone relies on the contract.
 
-If holders escrow at least that quorum of the supply before the deadline, every holder can be converted at that price. Conversion can be done address by address after execution. A holder who does not accept is still converted. If the quorum is not reached by the deadline, the buyer takes the escrow back and acceptors take their shares back.
+The buyer's own holding counts toward that quorum, at the lesser of the balance when the offer was posted and the balance still held. Other holders count by escrowing shares. If that sum reaches the quorum before the deadline, the offer is final, transfers of the class freeze, and every holder can claim the same price from the escrow. Anyone may submit a holder's claim. The company may also push at most 32 holders in one call. A holder who does not accept is still paid on a claim, at the same price. Consideration still unclaimed after the window stored in the company-rules contract is credited to the recipient those rules name, and the shares still move to the buyer. If the quorum is not reached by the deadline, the buyer takes the escrow back and acceptors take their shares back.
 
 The parties acknowledge that a forced conversion may also need a corporate approval, a squeeze-out proceeding, or a governor resolution. **[List the extra conditions, or state that the on-chain quorum is the agreed condition.]** The contract does not check those extra conditions.
 

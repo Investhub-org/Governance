@@ -73,9 +73,11 @@ contract GvAcquisitionTest is Test {
         vm.expectPartialRevert(GvAcquisition.QuorumAlreadyReached.selector);
         acquisition.cancelDrag(id);
         acquisition.executeDrag(id);
-        acquisition.convert(id, alice);
-        acquisition.convert(id, bob);
-        acquisition.convert(id, cara);
+        acquisition.claimDrag(id, alice);
+        address[] memory rest = new address[](2);
+        rest[0] = bob;
+        rest[1] = cara;
+        assertEq(acquisition.pushDrag(id, rest), 2);
         acquisition.refundDragSurplus(id);
 
         assertEq(share.balanceOf(buyer), 100);
@@ -88,6 +90,128 @@ contract GvAcquisitionTest is Test {
         assertEq(usdc.balanceOf(bob), 25 * PRICE);
         assertEq(usdc.balanceOf(cara), 25 * PRICE);
         assertEq(usdc.balanceOf(buyer), 25 * PRICE);
+    }
+
+    function test_large_buyer_counts_toward_quorum_and_cannot_inflate_it() public {
+        _give(buyer, 30);
+        _give(alice, 45);
+        _give(bob, 25);
+        _arm();
+        _approveSale(alice);
+        _fund(buyer, address(acquisition), 100 * PRICE);
+
+        vm.prank(buyer);
+        uint256 id = acquisition.postDrag(PRICE, uint64(block.timestamp) + 7 days, 7500);
+        vm.prank(buyer);
+        vm.expectRevert(abi.encodeWithSelector(GvAcquisition.BuyerCannotAccept.selector, buyer));
+        acquisition.acceptDrag(id, 1);
+
+        vm.prank(alice);
+        acquisition.acceptDrag(id, 44);
+        vm.expectPartialRevert(GvAcquisition.QuorumNotReached.selector);
+        acquisition.executeDrag(id);
+
+        vm.prank(alice);
+        acquisition.acceptDrag(id, 1);
+        (uint256 counted, uint256 requiredShares, uint256 buyerCounted_) = acquisition.dragQuorumProgress(id);
+        assertEq(buyerCounted_, 30);
+        assertEq(counted, 75);
+        assertEq(requiredShares, 75);
+        acquisition.executeDrag(id);
+        assertTrue(acquisition.blocksPeerTransfers());
+        vm.prank(bob);
+        vm.expectPartialRevert(GvShareTerms.TransferWindowOpen.selector);
+        share.transfer(alice, 1);
+
+        acquisition.claimDrag(id, alice);
+        acquisition.claimDrag(id, bob);
+        assertEq(share.balanceOf(buyer), 100);
+        assertEq(acquisition.proceeds(bob, address(usdc)), 25 * PRICE);
+    }
+
+    function test_recovery_onto_the_buyer_does_not_raise_the_snapshot() public {
+        _give(buyer, 40);
+        _give(alice, 30);
+        _give(bob, 30);
+        _arm();
+        _fund(buyer, address(acquisition), 100 * PRICE);
+        vm.prank(buyer);
+        uint256 id = acquisition.postDrag(PRICE, uint64(block.timestamp) + 90 days, 7500);
+
+        vm.prank(director);
+        uint256 recoveryId = recovery.proposeRecovery(alice, buyer, 30, keccak256("inflate"), false);
+        vm.warp(recovery.recovery(recoveryId).executeAfter);
+        recovery.executeRecovery(recoveryId);
+
+        (uint256 counted,, uint256 buyerCounted_) = acquisition.dragQuorumProgress(id);
+        assertEq(share.balanceOf(buyer), 70);
+        assertEq(buyerCounted_, 40);
+        assertEq(counted, 40);
+        vm.expectPartialRevert(GvAcquisition.QuorumNotReached.selector);
+        acquisition.executeDrag(id);
+        vm.prank(buyer);
+        acquisition.cancelDrag(id);
+        assertTrue(acquisition.drag(id).cancelled);
+    }
+
+    function test_losing_shares_after_post_drops_the_buyer_out_of_quorum() public {
+        _give(buyer, 80);
+        _give(alice, 20);
+        _arm();
+        _fund(buyer, address(acquisition), 100 * PRICE);
+        vm.prank(buyer);
+        uint256 id = acquisition.postDrag(PRICE, uint64(block.timestamp) + 90 days, 7500);
+        assertGt(acquisition.drag(id).quorumReachedAt, 0);
+        vm.prank(buyer);
+        vm.expectPartialRevert(GvAcquisition.QuorumAlreadyReached.selector);
+        acquisition.cancelDrag(id);
+
+        vm.prank(director);
+        uint256 recoveryId = recovery.proposeRecovery(buyer, alice, 60, keccak256("deflate"), false);
+        vm.warp(recovery.recovery(recoveryId).executeAfter);
+        recovery.executeRecovery(recoveryId);
+        (uint256 counted,, uint256 buyerCounted_) = acquisition.dragQuorumProgress(id);
+        assertEq(share.balanceOf(buyer), 20);
+        assertEq(buyerCounted_, 20);
+        assertEq(counted, 20);
+        vm.expectPartialRevert(GvAcquisition.QuorumNotReached.selector);
+        acquisition.executeDrag(id);
+        vm.prank(buyer);
+        acquisition.cancelDrag(id);
+        assertTrue(acquisition.drag(id).cancelled);
+    }
+
+    function test_unclaimed_drag_proceeds_redirect_after_the_window() public {
+        _give(buyer, 80);
+        _give(alice, 20);
+        _arm();
+        _fund(buyer, address(acquisition), 100 * PRICE);
+        vm.prank(buyer);
+        uint256 id = acquisition.postDrag(PRICE, uint64(block.timestamp) + 7 days, 7500);
+        acquisition.executeDrag(id);
+
+        address[] memory tooMany = new address[](33);
+        vm.expectPartialRevert(GvAcquisition.BatchBounds.selector);
+        acquisition.pushDrag(id, tooMany);
+
+        vm.expectPartialRevert(GvAcquisition.UnclaimedRecipientUnset.selector);
+        acquisition.redirectUnclaimed(id, alice);
+        rules.setUnclaimedRecipient(stranger);
+        vm.warp(uint256(acquisition.drag(id).executedAt) + rules.unclaimedWindow());
+        vm.expectPartialRevert(GvAcquisition.TooEarly.selector);
+        acquisition.redirectUnclaimed(id, alice);
+        vm.warp(block.timestamp + 1);
+        acquisition.redirectUnclaimed(id, alice);
+
+        assertEq(share.balanceOf(buyer), 100);
+        assertEq(share.balanceOf(alice), 0);
+        assertEq(acquisition.proceeds(alice, address(usdc)), 0);
+        assertEq(acquisition.proceeds(stranger, address(usdc)), 20 * PRICE);
+        acquisition.refundDragSurplus(id);
+        _withdraw(stranger, address(acquisition));
+        _withdraw(buyer, address(acquisition));
+        assertEq(usdc.balanceOf(stranger), 20 * PRICE);
+        assertEq(usdc.balanceOf(buyer), 80 * PRICE);
     }
 
     function test_drag_below_quorum_refunds_the_buyer_and_returns_shares() public {

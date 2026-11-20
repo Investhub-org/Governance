@@ -3,6 +3,9 @@ pragma solidity ^0.8.24;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { ECDSA } from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import { MerkleProof } from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { GvCompanyRules } from "./GvCompanyRules.sol";
 import { GvEscrow } from "./GvEscrow.sol";
@@ -17,7 +20,10 @@ import { IGvSharePolicy, IGvTransferPermit } from "./interfaces/IGvSharePolicy.s
  * timelock has bound those contracts as share modules.
  *
  * Holders accept the current SHA version before they can receive shares. The SHA text stays off-chain.
- * The chain stores the keccak256 hash, a version, and an optional CID.
+ * The chain stores the keccak256 hash, a version, and an optional CID. Acceptance is stored per account.
+ * The holder can call {acceptSha}, a relayer can submit their EIP-712 signature, or anyone can submit a
+ * Merkle proof against the root the owner published for this version. The root is the owner's list of
+ * accounts that accepted off-chain. The signature is the holder's own proof. Both write `acceptedVersion`.
  *
  * Pre-emption, when enabled, rejects a direct peer transfer. The seller escrows the shares for the
  * window in {GvCompanyRules.preEmptionWindow}. Existing holders may take up to their pro rata cap at
@@ -27,8 +33,15 @@ import { IGvSharePolicy, IGvTransferPermit } from "./interfaces/IGvSharePolicy.s
  *
  * The whitelist is the issuer's transfer list for this token. It is not a copy of a CMTAT rule engine.
  * A wrapped CMTAT keeps that engine on the underlying token.
+ *
+ * Pre-emption does not apply to a mint or to a transfer from {issuerTreasury}. Those still require the
+ * recipient to be whitelisted and to hold the current SHA, and a treasury transfer still respects the
+ * sender's lock-up. {PrimaryIssuance} records each one.
  */
-contract GvShareTerms is Ownable, GvEscrow, IGvSharePolicy {
+contract GvShareTerms is Ownable, GvEscrow, EIP712, IGvSharePolicy {
+    uint256 public constant MAX_BATCH = 64;
+    bytes32 private constant ACCEPT_TYPEHASH = keccak256("AcceptSha(address account,uint256 version,bytes32 shaHash)");
+
     struct PreEmption {
         address seller;
         address buyer;
@@ -49,9 +62,15 @@ contract GvShareTerms is Ownable, GvEscrow, IGvSharePolicy {
     address public consideration;
     bool public preEmptionEnabled = true;
 
+    /// @notice Primary-issuance wallet. Transfers from this address skip pre-emption and nothing else.
+    address public issuerTreasury;
+
     bytes32 public shaHash;
     uint256 public shaVersion;
     string public shaCid;
+    /// @notice Root of leaves `keccak256(bytes.concat(keccak256(abi.encode(account, shaVersion, shaHash))))`.
+    /// Cleared when a new SHA version is published. Pairs are sorted. Odd nodes are promoted.
+    bytes32 public shaAcceptanceRoot;
 
     mapping(address account => uint256 version) public acceptedVersion;
     mapping(address account => bool) public whitelisted;
@@ -86,10 +105,18 @@ contract GvShareTerms is Ownable, GvEscrow, IGvSharePolicy {
     error NothingRemaining(uint256 id);
     error NoOtherHolders(uint256 id);
     error BuyerCannotExercise(address buyer);
+    error BatchBounds(uint256 length, uint256 max);
+    error BadSignature(address account);
+    error BadProof(address account);
+    error AcceptanceRootUnset();
 
     event ShaPublished(uint256 indexed version, bytes32 shaHash, string cid);
     event ShaAccepted(address indexed account, uint256 indexed version, bytes32 shaHash);
+    event ShaAcceptanceRootSet(uint256 indexed version, bytes32 indexed shaHash, bytes32 root);
     event WhitelistSet(address indexed account, bool allowed);
+    event IssuerTreasurySet(address indexed treasury);
+    /// @notice A mint (`mint` is true, `from` is zero) or a transfer from {issuerTreasury}. Pre-emption did not apply.
+    event PrimaryIssuance(address indexed from, address indexed to, uint256 amount, bool mint);
     event LockupSet(address indexed account, uint64 until);
     event PreEmptionEnabledSet(bool enabled);
     event ConsiderationSet(address indexed currency);
@@ -106,7 +133,10 @@ contract GvShareTerms is Ownable, GvEscrow, IGvSharePolicy {
     event PreEmptionSettled(uint256 indexed id, address indexed buyer, uint256 amount, uint256 cost);
     event PreEmptionReturned(uint256 indexed id, address indexed seller, uint256 amount);
 
-    constructor(address issuer, GvShare token_, GvCompanyRules rules_, address consideration_) Ownable(issuer) {
+    constructor(address issuer, GvShare token_, GvCompanyRules rules_, address consideration_)
+        Ownable(issuer)
+        EIP712("GvShareTerms", "1")
+    {
         if (address(token_) == address(0) || address(rules_) == address(0) || consideration_ == address(0)) {
             revert ZeroAddress();
         }
@@ -130,19 +160,69 @@ contract GvShareTerms is Ownable, GvEscrow, IGvSharePolicy {
         version = ++shaVersion;
         shaHash = hash;
         shaCid = cid;
+        shaAcceptanceRoot = bytes32(0);
         emit ShaPublished(version, hash, cid);
+        emit ShaAcceptanceRootSet(version, hash, bytes32(0));
     }
 
     function acceptSha() external {
+        _recordAcceptance(msg.sender);
+    }
+
+    /// @notice EIP-712 digest for the current SHA version. The holder signs this. A relayer submits it.
+    function acceptanceDigest(address account) public view returns (bytes32) {
         if (shaVersion == 0) revert ShaNotPublished();
-        acceptedVersion[msg.sender] = shaVersion;
-        emit ShaAccepted(msg.sender, shaVersion, shaHash);
+        if (account == address(0)) revert ZeroAddress();
+        return _hashTypedDataV4(keccak256(abi.encode(ACCEPT_TYPEHASH, account, shaVersion, shaHash)));
+    }
+
+    /// @notice Relay a holder's signature of {acceptanceDigest}. The stored acceptance is still per account.
+    function acceptShaBySig(address account, bytes calldata signature) external {
+        _acceptBySig(account, signature);
+    }
+
+    function acceptShaBySigBatch(address[] calldata accounts, bytes[] calldata signatures) external {
+        uint256 n = accounts.length;
+        if (n == 0 || n > MAX_BATCH || n != signatures.length) revert BatchBounds(n, MAX_BATCH);
+        for (uint256 i; i < n; ++i) {
+            _acceptBySig(accounts[i], signatures[i]);
+        }
+    }
+
+    /// @notice Owner publishes the inclusion root for the current SHA. Publish the SHA first.
+    function setShaAcceptanceRoot(bytes32 root) external onlyOwner {
+        if (shaVersion == 0) revert ShaNotPublished();
+        shaAcceptanceRoot = root;
+        emit ShaAcceptanceRootSet(shaVersion, shaHash, root);
+    }
+
+    function acceptShaWithProof(address account, bytes32[] calldata proof) external {
+        _acceptWithProof(account, proof);
+    }
+
+    function acceptShaWithProofBatch(address[] calldata accounts, bytes32[][] calldata proofs) external {
+        uint256 n = accounts.length;
+        if (n == 0 || n > MAX_BATCH || n != proofs.length) revert BatchBounds(n, MAX_BATCH);
+        for (uint256 i; i < n; ++i) {
+            _acceptWithProof(accounts[i], proofs[i]);
+        }
     }
 
     function setWhitelist(address account, bool allowed) external onlyOwner {
-        if (account == address(0)) revert ZeroAddress();
-        whitelisted[account] = allowed;
-        emit WhitelistSet(account, allowed);
+        _setWhitelist(account, allowed);
+    }
+
+    function setWhitelistBatch(address[] calldata accounts, bool allowed) external onlyOwner {
+        uint256 n = accounts.length;
+        if (n == 0 || n > MAX_BATCH) revert BatchBounds(n, MAX_BATCH);
+        for (uint256 i; i < n; ++i) {
+            _setWhitelist(accounts[i], allowed);
+        }
+    }
+
+    function setIssuerTreasury(address treasury) external onlyOwner {
+        issuerTreasury = treasury;
+        emit IssuerTreasurySet(treasury);
     }
 
     function setLockup(address account, uint64 until) external onlyOwner {
@@ -173,24 +253,27 @@ contract GvShareTerms is Ownable, GvEscrow, IGvSharePolicy {
      * contract just armed, is allowed through. Every other peer transfer must pass the whitelist,
      * the recipient's SHA acceptance, the lock-up, and pre-emption.
      */
-    function authorizeTransfer(address from, address to, uint256 amount) external view {
+    function authorizeTransfer(address from, address to, uint256 amount) external {
         if (msg.sender != address(token)) revert NotShare(msg.sender);
         if (from == _gateFrom && to == _gateTo && amount == _gateAmount && amount != 0) return;
         if (acquisition != address(0) && IGvTransferPermit(acquisition).permitsTransfer(from, to, amount)) return;
-        if (from == address(0)) {
-            if (acquisition != address(0) && IGvTransferPermit(acquisition).blocksPeerTransfers()) {
-                revert TransferWindowOpen();
-            }
-            _checkRecipient(to);
-            return;
-        }
-        if (to == address(0)) revert PreEmptionRequired();
         if (acquisition != address(0) && IGvTransferPermit(acquisition).blocksPeerTransfers()) {
             revert TransferWindowOpen();
         }
-        if (lockedUntil[from] > block.timestamp) revert Locked(from, lockedUntil[from]);
-        if (!whitelisted[from]) revert NotWhitelisted(from);
+        if (to == address(0)) revert PreEmptionRequired();
+
+        bool mint = from == address(0);
+        bool treasury = issuerTreasury != address(0) && from == issuerTreasury;
+        if (!mint) {
+            if (lockedUntil[from] > block.timestamp) revert Locked(from, lockedUntil[from]);
+            if (!whitelisted[from]) revert NotWhitelisted(from);
+            if (treasury && !holdsCurrentSha(from)) revert ShaNotAccepted(from, shaVersion);
+        }
         _checkRecipient(to);
+        if (mint || treasury) {
+            emit PrimaryIssuance(from, to, amount, mint);
+            return;
+        }
         if (preEmptionEnabled) revert PreEmptionRequired();
     }
 
@@ -271,6 +354,34 @@ contract GvShareTerms is Ownable, GvEscrow, IGvSharePolicy {
         offer.cancelled = true;
         _gated(address(this), offer.seller, remaining);
         emit PreEmptionReturned(id, offer.seller, remaining);
+    }
+
+    function _setWhitelist(address account, bool allowed) private {
+        if (account == address(0)) revert ZeroAddress();
+        whitelisted[account] = allowed;
+        emit WhitelistSet(account, allowed);
+    }
+
+    function _recordAcceptance(address account) private {
+        if (shaVersion == 0) revert ShaNotPublished();
+        if (account == address(0)) revert ZeroAddress();
+        acceptedVersion[account] = shaVersion;
+        emit ShaAccepted(account, shaVersion, shaHash);
+    }
+
+    function _acceptBySig(address account, bytes calldata signature) private {
+        address signer = ECDSA.recover(acceptanceDigest(account), signature);
+        if (signer != account) revert BadSignature(account);
+        _recordAcceptance(account);
+    }
+
+    function _acceptWithProof(address account, bytes32[] calldata proof) private {
+        if (shaVersion == 0) revert ShaNotPublished();
+        if (shaAcceptanceRoot == bytes32(0)) revert AcceptanceRootUnset();
+        if (account == address(0)) revert ZeroAddress();
+        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(account, shaVersion, shaHash))));
+        if (!MerkleProof.verifyCalldata(proof, shaAcceptanceRoot, leaf)) revert BadProof(account);
+        _recordAcceptance(account);
     }
 
     function _checkRecipient(address account) private view {

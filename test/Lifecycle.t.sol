@@ -19,7 +19,9 @@ contract LifecycleTest is LifecycleSim {
         simulate(32);
         assertEq(holderCount, 32);
         assertGt(totalGas, 0);
-        assertEq(share.balanceOf(InvestorBook.role("drag-buyer")), InvestorBook.SUPPLY);
+        assertTrue(acquisition.drag(dragId).executed);
+        assertEq(acquisition.drag(dragId).buyer, InvestorBook.role("tag-buyer"));
+        assertGt(acquisition.drag(dragId).buyerHeldAtPost, 250_000);
     }
 
     function test_lifecycle_five_thousand() public {
@@ -43,7 +45,8 @@ contract LifecycleTest is LifecycleSim {
         assertEq(IERC20Metadata(BASE_USDC).symbol(), "USDC");
         assertEq(IERC20Metadata(BASE_USDC).decimals(), 6);
         simulate(16);
-        assertEq(share.balanceOf(InvestorBook.role("drag-buyer")), InvestorBook.SUPPLY);
+        assertTrue(acquisition.drag(dragId).executed);
+        assertEq(acquisition.drag(dragId).buyer, InvestorBook.role("tag-buyer"));
     }
 
     function test_book_matches_offchain_fixture() public view {

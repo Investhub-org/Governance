@@ -2,8 +2,9 @@
 pragma solidity ^0.8.24;
 
 /// @notice Called by {GvShare} on every ordinary mint and transfer when a policy is set.
+/// Not a view: a policy may emit an audit event for a primary issuance. It must not move tokens.
 interface IGvSharePolicy {
-    function authorizeTransfer(address from, address to, uint256 amount) external view;
+    function authorizeTransfer(address from, address to, uint256 amount) external;
 }
 
 /// @notice A module the timelock has bound to {GvShare.moduleTransfer}.

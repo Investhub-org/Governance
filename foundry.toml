@@ -7,7 +7,7 @@ evm_version = "prague"
 optimizer = true
 optimizer_runs = 200
 ffi = false
-# One Foundry call walks the whole lifecycle. Converting 5,000 holders does not fit in 2e9.
+# One Foundry call walks the whole lifecycle, including the Merkle acceptance of 5,000 holders.
 gas_limit = 8_000_000_000
 fs_permissions = [{ access = "read", path = "./" }]
 auto_detect_remappings = false

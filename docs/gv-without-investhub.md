@@ -285,7 +285,7 @@ No InvestHub API is required for any of those reads.
 
 The governor is still the ballot. The company deploys the extra contracts itself. `script/DeployIssuerTerms.s.sol` does that only when `GV_CONFIRM` is `deploy-gv-terms` and you pass `--broadcast` yourself. It does not set the share token's policy. Only the timelock can call `setTransferPolicy` and `setShareModule`, which means an executed proposal.
 
-Until that proposal, the share token transfers as before. After it, a recipient needs to be whitelisted and to have called `acceptSha` for the current SHA hash. Read [legal-wrapper.md](legal-wrapper.md) before treating any stored number as a statutory figure. The defaults are placeholders.
+Until that proposal, the share token transfers as before. After it, a recipient needs to be whitelisted and to have accepted the current SHA hash, by `acceptSha`, by a relayed EIP-712 signature, or by a Merkle proof that stores the same acceptance. A mint and a transfer from the configured treasury skip pre-emption and emit `PrimaryIssuance`. Read [legal-wrapper.md](legal-wrapper.md) before treating any stored number as a statutory figure. The defaults are placeholders.
 
 An off-chain notifier subscribes to `InvitationNotice` on `GvAssembly`. The log has the meeting type, the notice deadline, the invitation hash, and an optional CID. It has no email address. The notifier looks up holders from the share token and addresses from the company's own register. The meeting can be opened by anyone after the notice, whether or not a mail was sent.
 
