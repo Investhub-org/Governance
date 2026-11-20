@@ -1,0 +1,3 @@
+Synthetic shareholder terms for the lifecycle simulation.
+This text is not a shareholder agreement and not legal advice.
+Version: gv-sim-sha-v1
