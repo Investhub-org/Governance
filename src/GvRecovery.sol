@@ -7,6 +7,10 @@ import { GvShare } from "./GvShare.sol";
 import { GvShareTerms } from "./GvShareTerms.sol";
 import { IGvShareModule } from "./interfaces/IGvSharePolicy.sol";
 
+interface IGvDragFreeze {
+    function dragUnsettled() external view returns (bool);
+}
+
 /**
  * @title GvRecovery
  * @notice Time-delayed forced transfer for a lost key or a court order.
@@ -20,7 +24,14 @@ import { IGvShareModule } from "./interfaces/IGvSharePolicy.sol";
  * A board-resolution recovery (courtOrder = false) can be cancelled by the affected holder, by a
  * director, or by the kit timelock. A court-order recovery cannot be cancelled by the affected holder.
  * The timelock and a director still can, before execution. Execution is permissionless once the delay
- * has passed and enough directors have signed. The configured signature count is a placeholder.
+ * has passed and enough directors have signed, and no drag is unsettled. The configured signature
+ * count is a placeholder.
+ *
+ * Execution reverts while {GvAcquisition.dragUnsettled} is true. A recovery cannot move shares onto
+ * the buyer, or off the buyer, from the moment a drag is posted until that drag is cancelled or the
+ * buyer holds the whole supply. Blocking the transfer is safer than trying to keep the quorum neutral,
+ * because the same move would also change who can claim after the offer is final. An open tag sale
+ * does not use this freeze.
  *
  * Design reference, not a copy: a public recovery note that a forced move should be announced and
  * delayed rather than silent. The implementation here is a board or court-hash path, not that code.
@@ -68,6 +79,7 @@ contract GvRecovery is IGvShareModule {
     error RecipientNotEligible(address to);
     error InsufficientBalance(uint256 balance, uint256 amount);
     error NothingToRecover(address from);
+    error DragUnsettled();
 
     event RecoveryProposed(
         uint256 indexed id,
@@ -167,6 +179,8 @@ contract GvRecovery is IGvShareModule {
         if (block.timestamp < item.executeAfter) revert TooEarly(id, item.executeAfter);
         uint256 need = rules.recoverySignatures();
         if (item.signatures < need) revert NeedSignatures(item.signatures, need);
+        address sale = terms.acquisition();
+        if (sale != address(0) && IGvDragFreeze(sale).dragUnsettled()) revert DragUnsettled();
         uint256 balance = token.balanceOf(item.from);
         uint256 amount = item.amount == 0 ? balance : item.amount;
         if (amount == 0) revert NothingToRecover(item.from);

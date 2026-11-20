@@ -194,14 +194,20 @@ contract GvAcquisition is GvEscrow, IGvShareModule, IGvTransferPermit {
         return from == _forceFrom && to == _forceTo && amount == _forceAmount && amount != 0;
     }
 
-    function blocksPeerTransfers() external view returns (bool) {
-        if (_tagOpen()) return true;
+    /// @notice True from the moment a drag is posted until it is cancelled or the buyer holds every share
+    /// and this contract holds none. That is the window in which a recovery must not move the register.
+    function dragUnsettled() public view returns (bool) {
         uint256 id = activeDrag;
         if (id == 0) return false;
         Drag storage offer = _drags[id];
         if (offer.cancelled) return false;
         if (!offer.executed) return true;
         return token.balanceOf(offer.buyer) != token.totalSupply() || token.balanceOf(address(this)) != 0;
+    }
+
+    function blocksPeerTransfers() external view returns (bool) {
+        if (_tagOpen()) return true;
+        return dragUnsettled();
     }
 
     function postDrag(uint256 pricePerToken, uint64 deadline, uint16 quorumBps)

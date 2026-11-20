@@ -31,6 +31,10 @@ import {
  *
  * Set only one of `existingUnderlying` and `existingVotesToken`. Leave both at zero for a native share.
  */
+interface IGvArticlesIssuer {
+    function recognizeIssuer(address issuer) external;
+}
+
 contract GvKitFactory {
     enum VotesKind {
         NativeShare,
@@ -104,6 +108,8 @@ contract GvKitFactory {
         address indexed issuer, address share, address governor, address timelock, address dividend, string metadataURI
     );
     event VotesTokenBound(address indexed governor, address indexed votesToken, address underlying, VotesKind kind);
+
+    /// @dev The governor records the issuer in the deploy transaction. This factory is not that issuer.
 
     /**
      * @notice Bind deployers that were constructed with this factory's address.
@@ -232,6 +238,7 @@ contract GvKitFactory {
 
         governor = _deployGovernor(issuer, govSpec, salt, share, timelock);
         if (governor != plan.governor) revert PredictedAddressMismatch();
+        IGvArticlesIssuer(governor).recognizeIssuer(issuer);
 
         dividend = dividendDeployer.deploy(derivedSalt(issuer, salt, DIVIDEND_TAG), timelock);
         if (dividend != plan.dividend) revert PredictedAddressMismatch();

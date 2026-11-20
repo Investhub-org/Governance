@@ -6,6 +6,8 @@ import { console2 } from "forge-std/console2.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { IGovernor } from "@openzeppelin/contracts/governance/IGovernor.sol";
+import { GvAssembly } from "../src/GvAssembly.sol";
+import { GvCompanyRules } from "../src/GvCompanyRules.sol";
 import { GvDividend } from "../src/GvDividend.sol";
 import { GvGovernor } from "../src/GvGovernor.sol";
 import { GvKitFactory } from "../src/GvKitFactory.sol";
@@ -86,6 +88,9 @@ contract GvForkTest is Test {
         vm.warp(vm.getBlockTimestamp() + 1);
         governor = GvGovernor(payable(governorAddr));
         dividend = GvDividend(dividendAddr);
+        GvCompanyRules rules = new GvCompanyRules(address(this));
+        GvAssembly assemblyGv = new GvAssembly(address(this), IERC20(share), rules, governor);
+        governor.setArticlesGate(address(assemblyGv));
         console2.log("fork governor", governorAddr);
     }
 

@@ -4,6 +4,9 @@ pragma solidity ^0.8.24;
 import { Test } from "forge-std/Test.sol";
 import { IVotes } from "@openzeppelin/contracts/governance/utils/IVotes.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import { GvAssembly } from "../src/GvAssembly.sol";
+import { GvCompanyRules } from "../src/GvCompanyRules.sol";
 import { GvDirectory } from "../src/GvDirectory.sol";
 import { GvDividend } from "../src/GvDividend.sol";
 import { GvGovernor } from "../src/GvGovernor.sol";
@@ -91,6 +94,7 @@ abstract contract KitFixture is Test {
         bytes[] memory calldatas,
         string memory description
     ) internal returns (uint256 proposalId) {
+        _ensureArticlesGate(governor);
         uint256[] memory values = new uint256[](targets.length);
         vm.prank(voter);
         proposalId = governor.propose(targets, values, calldatas, description);
@@ -102,5 +106,16 @@ abstract contract KitFixture is Test {
         governor.queue(targets, values, calldatas, descHash);
         vm.warp(governor.proposalEta(proposalId));
         governor.execute(targets, values, calldatas, descHash);
+    }
+
+    /// @dev An executed proposal now requires the articles gate. The issuer holds the supply in these tests,
+    /// so an unbound proposal is checked as qualified and a full For vote passes that placeholder.
+    function _ensureArticlesGate(GvGovernor governor) internal {
+        if (governor.articlesGate() != address(0)) return;
+        address issuer_ = governor.articlesIssuer();
+        GvCompanyRules rules = new GvCompanyRules(issuer_);
+        GvAssembly assemblyGv = new GvAssembly(issuer_, IERC20(address(governor.token())), rules, governor);
+        vm.prank(issuer_);
+        governor.setArticlesGate(address(assemblyGv));
     }
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import { IGovernor } from "@openzeppelin/contracts/governance/IGovernor.sol";
 import { GovernorSettings } from "@openzeppelin/contracts/governance/extensions/GovernorSettings.sol";
 import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
 import { Test } from "forge-std/Test.sol";
@@ -76,6 +77,11 @@ contract GvAssemblyTest is Test {
         share.transfer(alice, 10);
         vm.prank(issuer);
         share.transfer(bob, 9);
+        vm.prank(alice);
+        share.delegate(alice);
+        vm.prank(bob);
+        share.delegate(bob);
+        vm.warp(block.timestamp + 1);
 
         vm.prank(bob);
         vm.expectPartialRevert(GvAssembly.ThresholdNotMet.selector);
@@ -243,6 +249,111 @@ contract GvAssemblyTest is Test {
         assertFalse(qualified.passed);
     }
 
+    function test_a_flash_loan_cannot_convene() public {
+        vm.prank(issuer);
+        share.transfer(alice, 1);
+        vm.prank(alice);
+        share.delegate(alice);
+        vm.warp(block.timestamp + 1);
+
+        address attacker = makeAddr("flash-borrower");
+        vm.prank(issuer);
+        share.transfer(attacker, 50);
+        vm.prank(attacker);
+        share.delegate(attacker);
+        vm.prank(attacker);
+        vm.expectPartialRevert(GvAssembly.ThresholdNotMet.selector);
+        assemblyGv.conveneByShareholders(
+            GvCompanyRules.MeetingType.EGM, INVITATION, CID, _one("Borrowed", GvCompanyRules.ResolutionClass.Ordinary)
+        );
+
+        vm.warp(block.timestamp + 1);
+        vm.prank(attacker);
+        uint256 id = assemblyGv.conveneByShareholders(
+            GvCompanyRules.MeetingType.EGM,
+            INVITATION,
+            CID,
+            _one("After the checkpoint", GvCompanyRules.ResolutionClass.Ordinary)
+        );
+        assertEq(assemblyGv.meeting(id).convener, attacker);
+    }
+
+    function test_execution_obeys_articles_unless_binding_mode_is_governor() public {
+        governor.recognizeIssuer(issuer);
+        vm.prank(issuer);
+        governor.setArticlesGate(address(assemblyGv));
+        TimelockController timelock = TimelockController(payable(governor.timelock()));
+        timelock.grantRole(timelock.PROPOSER_ROLE(), address(governor));
+        timelock.grantRole(timelock.EXECUTOR_ROLE(), address(governor));
+
+        vm.prank(issuer);
+        share.transfer(alice, 60);
+        vm.prank(issuer);
+        share.transfer(bob, 40);
+        _delegate(alice);
+        _delegate(bob);
+
+        GvAssembly.AgendaItem[] memory agenda = new GvAssembly.AgendaItem[](4);
+        agenda[0] = GvAssembly.AgendaItem({
+            title: "Ordinary", documentHash: keccak256("ordinary"), class: GvCompanyRules.ResolutionClass.Ordinary
+        });
+        agenda[1] = GvAssembly.AgendaItem({
+            title: "Statute", documentHash: keccak256("statute"), class: GvCompanyRules.ResolutionClass.Qualified
+        });
+        agenda[2] = GvAssembly.AgendaItem({
+            title: "Ordinary again",
+            documentHash: keccak256("ordinary-again"),
+            class: GvCompanyRules.ResolutionClass.Ordinary
+        });
+        agenda[3] = GvAssembly.AgendaItem({
+            title: "Statute again",
+            documentHash: keccak256("statute-again"),
+            class: GvCompanyRules.ResolutionClass.Qualified
+        });
+        assemblyGv.setDirector(director, true);
+        vm.prank(director);
+        uint256 meetingId = assemblyGv.conveneByBoard(GvCompanyRules.MeetingType.EGM, INVITATION, CID, agenda);
+        vm.warp(assemblyGv.meeting(meetingId).noticeDeadline);
+        assemblyGv.openMeeting(meetingId);
+
+        uint256 ordinaryId = _classProposal("Ordinary execution");
+        _voteSplit(ordinaryId);
+        assertEq(uint8(assemblyGv.executionClass(ordinaryId)), uint8(GvCompanyRules.ResolutionClass.Qualified));
+        vm.prank(alice);
+        assemblyGv.bindProposal(meetingId, 0, ordinaryId);
+        assertEq(uint8(assemblyGv.executionClass(ordinaryId)), uint8(GvCompanyRules.ResolutionClass.Ordinary));
+        _queue(ordinaryId, "Ordinary execution");
+        _execute(ordinaryId, "Ordinary execution");
+        assertEq(uint256(governor.state(ordinaryId)), uint256(IGovernor.ProposalState.Executed));
+
+        uint256 qualifiedId = _classProposal("Qualified execution");
+        _voteSplit(qualifiedId);
+        vm.prank(alice);
+        assemblyGv.bindProposal(meetingId, 1, qualifiedId);
+        vm.prank(bob);
+        assemblyGv.bindProposal(meetingId, 2, qualifiedId);
+        assertEq(uint8(assemblyGv.executionClass(qualifiedId)), uint8(GvCompanyRules.ResolutionClass.Qualified));
+        _queue(qualifiedId, "Qualified execution");
+        vm.warp(governor.proposalEta(qualifiedId));
+        vm.expectPartialRevert(GvAssembly.ArticlesNotPassed.selector);
+        _executeNow(qualifiedId, "Qualified execution");
+        assertEq(uint256(governor.state(qualifiedId)), uint256(IGovernor.ProposalState.Queued));
+
+        rules.setBindingMode(GvCompanyRules.BindingMode.Governor);
+        _executeNow(qualifiedId, "Qualified execution");
+        assertEq(uint256(governor.state(qualifiedId)), uint256(IGovernor.ProposalState.Executed));
+
+        rules.setBindingMode(GvCompanyRules.BindingMode.Both);
+        uint256 bothId = _classProposal("Both execution");
+        _voteSplit(bothId);
+        vm.prank(alice);
+        assemblyGv.bindProposal(meetingId, 3, bothId);
+        _queue(bothId, "Both execution");
+        vm.warp(governor.proposalEta(bothId));
+        vm.expectPartialRevert(GvAssembly.ArticlesNotPassed.selector);
+        _executeNow(bothId, "Both execution");
+    }
+
     function test_information_request_starts_a_clock_and_overdue_items_are_queryable() public {
         assemblyGv.setDirector(director, true);
         vm.prank(issuer);
@@ -289,6 +400,50 @@ contract GvAssemblyTest is Test {
         assertFalse(info.isPublicationOverdue(dutyId));
         assertTrue(info.duty(dutyId).late);
         assertEq(info.duty(dutyId).documentHash, keccak256("ciphertext-of-the-report"));
+    }
+
+    function _proposalCall()
+        internal
+        view
+        returns (address[] memory targets, uint256[] memory values, bytes[] memory calldatas)
+    {
+        targets = new address[](1);
+        targets[0] = address(governor);
+        values = new uint256[](1);
+        calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeCall(GovernorSettings.setVotingDelay, (uint48(2)));
+    }
+
+    function _classProposal(string memory description) internal returns (uint256 proposalId) {
+        (address[] memory targets, uint256[] memory values, bytes[] memory calldatas) = _proposalCall();
+        vm.prank(alice);
+        proposalId = governor.propose(targets, values, calldatas, description);
+    }
+
+    function _voteSplit(uint256 proposalId) internal {
+        vm.warp(governor.proposalSnapshot(proposalId) + 1);
+        vm.prank(alice);
+        governor.castVote(proposalId, 1);
+        vm.prank(bob);
+        governor.castVote(proposalId, 0);
+        vm.warp(governor.proposalDeadline(proposalId) + 1);
+    }
+
+    function _queue(uint256 proposalId, string memory description) internal {
+        (address[] memory targets, uint256[] memory values, bytes[] memory calldatas) = _proposalCall();
+        governor.queue(targets, values, calldatas, keccak256(bytes(description)));
+        proposalId;
+    }
+
+    function _execute(uint256 proposalId, string memory description) internal {
+        vm.warp(governor.proposalEta(proposalId));
+        _executeNow(proposalId, description);
+    }
+
+    function _executeNow(uint256 proposalId, string memory description) internal {
+        (address[] memory targets, uint256[] memory values, bytes[] memory calldatas) = _proposalCall();
+        governor.execute(targets, values, calldatas, keccak256(bytes(description)));
+        proposalId;
     }
 
     function _delegate(address account) internal {

@@ -260,6 +260,8 @@ contract LifecycleSim is Test {
         gasUsed += _gas();
         assemblyGv = new GvAssembly(issuer, share, rules, governor);
         gasUsed += _gas();
+        governor.setArticlesGate(address(assemblyGv));
+        gasUsed += _gas();
         info = new GvInformation(share, rules, assemblyGv);
         gasUsed += _gas();
         terms = new GvShareTerms(issuer, share, rules, address(usdc));
