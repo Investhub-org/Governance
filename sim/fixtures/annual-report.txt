@@ -1,0 +1,3 @@
+Synthetic annual report for Simulated Holdings.
+This text is not a financial statement.
+Version: gv-sim-annual-report-v1

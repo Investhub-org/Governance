@@ -6,6 +6,8 @@ This repository is software. The MIT licence in [LICENSE](LICENSE) is a copyrigh
 
 How to deploy and vote without the InvestHub UI: [docs/gv-without-investhub.md](docs/gv-without-investhub.md).
 
+A local lifecycle, from the issuer's own deployment through a drag-along, is in [docs/simulation.md](docs/simulation.md). Continuous integration runs 32 synthetic holders. Five thousand is a local run.
+
 How the articles and a shareholder agreement can point at these contracts, which numbers are placeholders rather than law, and why Aktionariat's contracts were not copied: [docs/legal-wrapper.md](docs/legal-wrapper.md). Draft clauses for a lawyer to rewrite: [docs/templates/articles-draft.md](docs/templates/articles-draft.md) and [docs/templates/sha-draft.md](docs/templates/sha-draft.md).
 
 ## Independence
@@ -119,9 +121,13 @@ src/deployers/GvDeployers.sol
 script/DeployInfrastructure.s.sol
 script/DeployIssuerKit.s.sol
 script/DeployIssuerTerms.s.sol
+script/SimulateLifecycle.s.sol
+script/lifecycle/
 script/build_merkle.py
+sim/
 test/
 docs/gv-without-investhub.md
+docs/simulation.md
 docs/legal-wrapper.md
 docs/security.md
 docs/templates/

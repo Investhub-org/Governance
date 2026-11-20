@@ -1,0 +1,449 @@
+{
+  "holders": 32,
+  "supply": 1000000,
+  "price": 1000000,
+  "dividendPerShare": 1000000,
+  "root": "0xe7ecab5622d6c72d88c6ef3849922e7c874036c5398b4b25cdee64e5b18bba07",
+  "dividendTotal": 1000000000000,
+  "shaHash": "0xca9d74a2b86f438af4ffc232878211782adc7422018275aa40f73c974a6566bf",
+  "annualReportHash": "0x4c53576f5e4c2e6905d4b714bff33da93e323f2709e7a69b03e2409891981cfb",
+  "roles": {
+    "issuer": "0xaefb4383efcafe3e266f6249bfcd6d9adc927686",
+    "director": "0x53ddf52dc876b71bc06932392d6a0c203af1ca04",
+    "preBuyer": "0x05921d84beec35b5fd61727fdb4c017d6b7f415f",
+    "tagBuyer": "0x046a3e5765adad4d7193f4b581db72782470fd65",
+    "dragBuyer": "0x35b95b2d65117895327165aa45b28cf4245c5a0a",
+    "investhub": "0xb8044d614884672283ef015d8f51b4969c091ee0",
+    "observer": "0xb254debf748ca7d7cf1a5e3423e688f0726fc523"
+  },
+  "investors": [
+    {
+      "index": 0,
+      "id": "sim-00000",
+      "label": "sim-holder-00000",
+      "address": "0x6e9b635abe9426a6df3d1bc9305b460fa15a3c5b",
+      "shares": 320000,
+      "commitment": 320000000000,
+      "dividend": 320000000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-A"
+    },
+    {
+      "index": 1,
+      "id": "sim-00001",
+      "label": "sim-holder-00001",
+      "address": "0xbb97f3062ace97d4cb39f5ddaa1e5a002f264402",
+      "shares": 180000,
+      "commitment": 180000000000,
+      "dividend": 180000000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-B"
+    },
+    {
+      "index": 2,
+      "id": "sim-00002",
+      "label": "sim-holder-00002",
+      "address": "0x679a916cfe04c96b90cbe25fc4bdb73e059e7ce9",
+      "shares": 120000,
+      "commitment": 120000000000,
+      "dividend": 120000000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-C"
+    },
+    {
+      "index": 3,
+      "id": "sim-00003",
+      "label": "sim-holder-00003",
+      "address": "0x491433ecdd60cdabbef0931b7aee6166f5ccaf70",
+      "shares": 100000,
+      "commitment": 100000000000,
+      "dividend": 100000000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-D"
+    },
+    {
+      "index": 4,
+      "id": "sim-00004",
+      "label": "sim-holder-00004",
+      "address": "0x6c7ab10830c7f53e9b815128b1d569c203ba8a1e",
+      "shares": 80000,
+      "commitment": 80000000000,
+      "dividend": 80000000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-A"
+    },
+    {
+      "index": 5,
+      "id": "sim-00005",
+      "label": "sim-holder-00005",
+      "address": "0xadee47b1373e95f43be41eb8c38c9ca3cfb9f9a2",
+      "shares": 51407,
+      "commitment": 51407000000,
+      "dividend": 51407000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-B"
+    },
+    {
+      "index": 6,
+      "id": "sim-00006",
+      "label": "sim-holder-00006",
+      "address": "0x45c0f10b994a9c5dc84ea7fe0610b0a2ba4216e9",
+      "shares": 25697,
+      "commitment": 25697000000,
+      "dividend": 25697000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-C"
+    },
+    {
+      "index": 7,
+      "id": "sim-00007",
+      "label": "sim-holder-00007",
+      "address": "0x8c256eec3a25a59c3d3a4a5b4c5c575fe8f21697",
+      "shares": 17131,
+      "commitment": 17131000000,
+      "dividend": 17131000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-D"
+    },
+    {
+      "index": 8,
+      "id": "sim-00008",
+      "label": "sim-holder-00008",
+      "address": "0x3efbd00026ed9be6c3ad949b8ca4c13710f94fbb",
+      "shares": 12848,
+      "commitment": 12848000000,
+      "dividend": 12848000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-A"
+    },
+    {
+      "index": 9,
+      "id": "sim-00009",
+      "label": "sim-holder-00009",
+      "address": "0x9b1d7b826702301b74f58c74f5c26a3bfa873733",
+      "shares": 10278,
+      "commitment": 10278000000,
+      "dividend": 10278000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-B"
+    },
+    {
+      "index": 10,
+      "id": "sim-00010",
+      "label": "sim-holder-00010",
+      "address": "0x94ff7494509a83f076bc078a39fb5c8613bd1d0d",
+      "shares": 8565,
+      "commitment": 8565000000,
+      "dividend": 8565000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-C"
+    },
+    {
+      "index": 11,
+      "id": "sim-00011",
+      "label": "sim-holder-00011",
+      "address": "0x221feeca88c92a26642d0c0445ebaa54329eb852",
+      "shares": 7342,
+      "commitment": 7342000000,
+      "dividend": 7342000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-D"
+    },
+    {
+      "index": 12,
+      "id": "sim-00012",
+      "label": "sim-holder-00012",
+      "address": "0xee1373de6939411ff384cc8695752baea61033a0",
+      "shares": 6424,
+      "commitment": 6424000000,
+      "dividend": 6424000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-A"
+    },
+    {
+      "index": 13,
+      "id": "sim-00013",
+      "label": "sim-holder-00013",
+      "address": "0x36d7da6f6d71e32953242d817b1aeec745a48dc6",
+      "shares": 5710,
+      "commitment": 5710000000,
+      "dividend": 5710000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-B"
+    },
+    {
+      "index": 14,
+      "id": "sim-00014",
+      "label": "sim-holder-00014",
+      "address": "0x806ecffcbe9d56be2ddd65cbefe91443143aba13",
+      "shares": 5139,
+      "commitment": 5139000000,
+      "dividend": 5139000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-C"
+    },
+    {
+      "index": 15,
+      "id": "sim-00015",
+      "label": "sim-holder-00015",
+      "address": "0x27bd5eabb6fa20706a36312551fd2c94b665994e",
+      "shares": 4672,
+      "commitment": 4672000000,
+      "dividend": 4672000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-D"
+    },
+    {
+      "index": 16,
+      "id": "sim-00016",
+      "label": "sim-holder-00016",
+      "address": "0x2dd3d5e1eedadb62a8305dca43bceadbd576b3db",
+      "shares": 4282,
+      "commitment": 4282000000,
+      "dividend": 4282000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-A"
+    },
+    {
+      "index": 17,
+      "id": "sim-00017",
+      "label": "sim-holder-00017",
+      "address": "0xeadfc78d318ea5179c803afb771f99e79d29b75d",
+      "shares": 3953,
+      "commitment": 3953000000,
+      "dividend": 3953000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-B"
+    },
+    {
+      "index": 18,
+      "id": "sim-00018",
+      "label": "sim-holder-00018",
+      "address": "0x14b49299a94813e4383ebea9acbbdd31c4bbbc22",
+      "shares": 3671,
+      "commitment": 3671000000,
+      "dividend": 3671000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-C"
+    },
+    {
+      "index": 19,
+      "id": "sim-00019",
+      "label": "sim-holder-00019",
+      "address": "0x5b41b7e730d6d29bbe5a5751c0e3cc2754a42e73",
+      "shares": 3426,
+      "commitment": 3426000000,
+      "dividend": 3426000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-D"
+    },
+    {
+      "index": 20,
+      "id": "sim-00020",
+      "label": "sim-holder-00020",
+      "address": "0x4eb9ca180acb9b22d7f714358e0e13b78e226a6f",
+      "shares": 3212,
+      "commitment": 3212000000,
+      "dividend": 3212000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-A"
+    },
+    {
+      "index": 21,
+      "id": "sim-00021",
+      "label": "sim-holder-00021",
+      "address": "0x24a5a9905ff30a208422de942950a7fb092589c2",
+      "shares": 3023,
+      "commitment": 3023000000,
+      "dividend": 3023000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-B"
+    },
+    {
+      "index": 22,
+      "id": "sim-00022",
+      "label": "sim-holder-00022",
+      "address": "0x93ffba570e40d925909b87a65aed9d249150ffc1",
+      "shares": 2855,
+      "commitment": 2855000000,
+      "dividend": 2855000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-C"
+    },
+    {
+      "index": 23,
+      "id": "sim-00023",
+      "label": "sim-holder-00023",
+      "address": "0xfc5ce5fdbba6f9fa7306e10bbcdba63e7c22a49d",
+      "shares": 2704,
+      "commitment": 2704000000,
+      "dividend": 2704000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-D"
+    },
+    {
+      "index": 24,
+      "id": "sim-00024",
+      "label": "sim-holder-00024",
+      "address": "0xe6a786935cc9e26f2f4a57609d9095e5dbbd1c21",
+      "shares": 2569,
+      "commitment": 2569000000,
+      "dividend": 2569000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-A"
+    },
+    {
+      "index": 25,
+      "id": "sim-00025",
+      "label": "sim-holder-00025",
+      "address": "0x17b9b4bb5eeaf9d8b889e261acb69eb91eec25a8",
+      "shares": 2447,
+      "commitment": 2447000000,
+      "dividend": 2447000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-B"
+    },
+    {
+      "index": 26,
+      "id": "sim-00026",
+      "label": "sim-holder-00026",
+      "address": "0x0f4f05ff24d676ffcf1f9cf35a77a45d9e203b7d",
+      "shares": 2336,
+      "commitment": 2336000000,
+      "dividend": 2336000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-C"
+    },
+    {
+      "index": 27,
+      "id": "sim-00027",
+      "label": "sim-holder-00027",
+      "address": "0x35ed9c2e50d1589c458e5750cd4a6d49b0f32b9e",
+      "shares": 2234,
+      "commitment": 2234000000,
+      "dividend": 2234000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-D"
+    },
+    {
+      "index": 28,
+      "id": "sim-00028",
+      "label": "sim-holder-00028",
+      "address": "0x346f8faf3d14661bcd74d2e0a3ffac39e41e9179",
+      "shares": 2141,
+      "commitment": 2141000000,
+      "dividend": 2141000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-A"
+    },
+    {
+      "index": 29,
+      "id": "sim-00029",
+      "label": "sim-holder-00029",
+      "address": "0x72a33fb445ae98e253bb4ffb414aa1aa14eb9fec",
+      "shares": 2055,
+      "commitment": 2055000000,
+      "dividend": 2055000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-B"
+    },
+    {
+      "index": 30,
+      "id": "sim-00030",
+      "label": "sim-holder-00030",
+      "address": "0x1e9109c19fe3cacf4bd79a0a6880bd1df4915ee0",
+      "shares": 1976,
+      "commitment": 1976000000,
+      "dividend": 1976000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-C"
+    },
+    {
+      "index": 31,
+      "id": "sim-00031",
+      "label": "sim-holder-00031",
+      "address": "0xd54b8ec85d30aee64c2b2cc554ac159dd8e45cac",
+      "shares": 1903,
+      "commitment": 1903000000,
+      "dividend": 1903000000,
+      "kyc": false,
+      "persona": "synthetic",
+      "segment": "SIM-D"
+    }
+  ],
+  "sampleProofs": [
+    {
+      "index": 0,
+      "proof": [
+        "0x9c90de933a2bf697549a29f224f49fb58315459d7020d3eac7e1f54a51e4be1d",
+        "0x1a1e4df0ff6597b187edc426db3a0e129781bf101b0d16cdcf085b4e6f3c881d",
+        "0x3d0bbefbcc152bc65106387f272f74a1a3ec5ac23ab344ac970caf36c3955314",
+        "0xbd1e502a1587a86b036cc8d7d4934a65a08dcfb8f6299c2bfd01f2315f91d374",
+        "0xd38b3e201955ca104c275ca65915f030f84ddb709fbe24d5fa2c25d9145aeb7b"
+      ]
+    },
+    {
+      "index": 1,
+      "proof": [
+        "0x4295247bf93bdaeb2fb072bb7bc576abf9c157a74b7ff4f5a09fe1055a767b24",
+        "0x1a1e4df0ff6597b187edc426db3a0e129781bf101b0d16cdcf085b4e6f3c881d",
+        "0x3d0bbefbcc152bc65106387f272f74a1a3ec5ac23ab344ac970caf36c3955314",
+        "0xbd1e502a1587a86b036cc8d7d4934a65a08dcfb8f6299c2bfd01f2315f91d374",
+        "0xd38b3e201955ca104c275ca65915f030f84ddb709fbe24d5fa2c25d9145aeb7b"
+      ]
+    },
+    {
+      "index": 16,
+      "proof": [
+        "0xda7157d145b37fea8d9cc2427e900a9993f762a7e62a35e572a1e59bb2ea50f2",
+        "0x667e2b0f1fdc468eac8c2ab47bfc2f84faf156301fe42aeea744a0d177c596c1",
+        "0x084bb72c3d2db09e657642aa777f5b7fb9408358be328a15f6042debdb42b6d8",
+        "0x3e7414f68c8169142230d5e0c44516997d3c7fb4f6d3ba12ac6382ba035de59e",
+        "0x4a247ba60aa6dbfb96a7595d541ee2fbeddb34ca040a2111db8f18a54b0af1c6"
+      ]
+    },
+    {
+      "index": 31,
+      "proof": [
+        "0x7b0586f99a4ac9f330308fcc43a4ffcfaf1f916b18be4b96ab48214c9bbb6107",
+        "0xf1695a865a5ab70ca5b30a80350a73a1ae8cb033df2bf7819a7dbc7cea4d26de",
+        "0x198fe6c5c13785277fbdf55c2fbff3cb262a92d65e729aa2a75ddf5da7f070a7",
+        "0xb79e0d20ddfc7b8d54203818cbeb115868a8dbb52736750751daf487c448d45f",
+        "0x4a247ba60aa6dbfb96a7595d541ee2fbeddb34ca040a2111db8f18a54b0af1c6"
+      ]
+    }
+  ],
+  "leafEncoding": "keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))))",
+  "addressDerivation": "last 20 bytes of keccak256(gv-sim-investor-v1 || uint256 index)"
+}

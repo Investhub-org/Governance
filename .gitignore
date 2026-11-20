@@ -1,6 +1,9 @@
 out/
 cache/
 broadcast/
+sim/out/
+__pycache__/
+*.pyc
 .env
 .idea/
 .vscode/
