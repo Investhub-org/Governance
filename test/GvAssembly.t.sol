@@ -1,0 +1,263 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import { GovernorSettings } from "@openzeppelin/contracts/governance/extensions/GovernorSettings.sol";
+import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
+import { Test } from "forge-std/Test.sol";
+import { GvAssembly } from "../src/GvAssembly.sol";
+import { GvCompanyRules } from "../src/GvCompanyRules.sol";
+import { GvGovernor } from "../src/GvGovernor.sol";
+import { GvInformation } from "../src/GvInformation.sol";
+import { GvShare } from "../src/GvShare.sol";
+
+contract GvAssemblyTest is Test {
+    bytes32 internal constant INVITATION = keccak256("invitation-pdf");
+    string internal constant CID = "bafybeiplaceholder";
+
+    GvShare internal share;
+    GvGovernor internal governor;
+    GvCompanyRules internal rules;
+    GvAssembly internal assemblyGv;
+    GvInformation internal info;
+
+    address internal issuer = makeAddr("issuer");
+    address internal director = makeAddr("director");
+    address internal alice = makeAddr("alice");
+    address internal bob = makeAddr("bob");
+    address internal stranger = makeAddr("stranger");
+
+    function setUp() public {
+        share = new GvShare("Example Shares", "EXS", 0, issuer, 100, address(this));
+        address[] memory empty = new address[](0);
+        TimelockController timelock = new TimelockController(1, empty, empty, address(this));
+        governor = new GvGovernor("Example Governor", share, timelock, 1, 3600, 1, 4);
+        rules = new GvCompanyRules(address(this));
+        assemblyGv = new GvAssembly(address(this), share, rules, governor);
+        info = new GvInformation(share, rules, assemblyGv);
+    }
+
+    function test_egm_convened_by_the_board_emits_an_invitation_and_waits_out_notice() public {
+        assemblyGv.setDirector(director, true);
+        vm.prank(issuer);
+        share.transfer(alice, 100);
+        assertEq(share.balanceOf(director), 0);
+
+        GvAssembly.AgendaItem[] memory agenda = _one("Remove a director", GvCompanyRules.ResolutionClass.Ordinary);
+        uint64 deadline = uint64(block.timestamp) + rules.noticePeriod(GvCompanyRules.MeetingType.EGM);
+        bytes32 agendaHash = assemblyGv.hashAgenda(agenda);
+
+        vm.expectEmit(true, true, true, true, address(assemblyGv));
+        emit GvAssembly.InvitationNotice(
+            1, uint8(GvCompanyRules.MeetingType.EGM), director, true, deadline, INVITATION, CID, agendaHash
+        );
+        vm.prank(director);
+        uint256 id = assemblyGv.conveneByBoard(GvCompanyRules.MeetingType.EGM, INVITATION, CID, agenda);
+
+        GvAssembly.Meeting memory meeting = assemblyGv.meeting(id);
+        assertEq(uint8(meeting.meetingType), uint8(GvCompanyRules.MeetingType.EGM));
+        assertEq(meeting.convener, director);
+        assertTrue(meeting.convenedByBoard);
+        assertEq(meeting.noticeDeadline, deadline);
+        assertEq(meeting.invitationHash, INVITATION);
+        assertEq(meeting.invitationCid, CID);
+        assertEq(meeting.agendaHash, agendaHash);
+        assertEq(assemblyGv.agendaLength(id), 1);
+        assertEq(assemblyGv.agendaItem(id, 0).title, "Remove a director");
+
+        vm.expectRevert(abi.encodeWithSelector(GvAssembly.NoticeNotElapsed.selector, id, deadline));
+        assemblyGv.openMeeting(id);
+        vm.warp(deadline);
+        assemblyGv.openMeeting(id);
+        assertEq(uint8(assemblyGv.meeting(id).phase), uint8(GvAssembly.Phase.Open));
+    }
+
+    function test_egm_convened_by_a_shareholder_above_the_threshold() public {
+        vm.prank(issuer);
+        share.transfer(alice, 10);
+        vm.prank(issuer);
+        share.transfer(bob, 9);
+
+        vm.prank(bob);
+        vm.expectPartialRevert(GvAssembly.ThresholdNotMet.selector);
+        assemblyGv.conveneByShareholders(
+            GvCompanyRules.MeetingType.EGM, INVITATION, CID, _one("Agenda", GvCompanyRules.ResolutionClass.Ordinary)
+        );
+
+        vm.prank(alice);
+        uint256 id = assemblyGv.conveneByShareholders(
+            GvCompanyRules.MeetingType.EGM, INVITATION, CID, _one("Capital", GvCompanyRules.ResolutionClass.Qualified)
+        );
+        GvAssembly.Meeting memory meeting = assemblyGv.meeting(id);
+        assertFalse(meeting.convenedByBoard);
+        assertEq(meeting.convener, alice);
+        assertEq(uint8(meeting.meetingType), uint8(GvCompanyRules.MeetingType.EGM));
+        assertEq(uint8(assemblyGv.agendaItem(id, 0).class), uint8(GvCompanyRules.ResolutionClass.Qualified));
+    }
+
+    function test_shareholders_below_the_threshold_convene_by_combining_support() public {
+        vm.prank(issuer);
+        share.transfer(alice, 6);
+        vm.prank(issuer);
+        share.transfer(bob, 6);
+
+        vm.prank(alice);
+        uint256 requestId = assemblyGv.fileConveningRequest(
+            GvCompanyRules.MeetingType.EGM,
+            INVITATION,
+            CID,
+            _one("Information", GvCompanyRules.ResolutionClass.Ordinary)
+        );
+        vm.prank(alice);
+        share.transfer(stranger, 6);
+        vm.prank(bob);
+        assemblyGv.supportConveningRequest(requestId);
+        vm.expectPartialRevert(GvAssembly.ThresholdNotMet.selector);
+        assemblyGv.conveneFromRequest(requestId);
+
+        vm.prank(stranger);
+        share.transfer(alice, 6);
+        uint256 id = assemblyGv.conveneFromRequest(requestId);
+        assertEq(assemblyGv.meeting(id).convener, alice);
+        assertFalse(assemblyGv.meeting(id).convenedByBoard);
+        assertEq(assemblyGv.request(requestId).meetingId, id);
+    }
+
+    function test_agm_uses_its_own_notice_and_a_short_board_cannot_convene() public {
+        GvCompanyRules.CapitalBand[] memory bands = new GvCompanyRules.CapitalBand[](1);
+        bands[0] = GvCompanyRules.CapitalBand({ capitalAtOrAbove: 1_000_000, minDirectors: 3 });
+        rules.setCapitalBands(bands);
+        rules.setShareCapital(1_000_000, "CHF");
+        assemblyGv.setDirector(director, true);
+
+        vm.prank(director);
+        vm.expectPartialRevert(GvAssembly.BoardBelowMinimum.selector);
+        assemblyGv.conveneByBoard(
+            GvCompanyRules.MeetingType.AGM, INVITATION, CID, _one("Accounts", GvCompanyRules.ResolutionClass.Ordinary)
+        );
+
+        rules.setShareCapital(0, "CHF");
+        vm.prank(director);
+        uint256 id = assemblyGv.conveneByBoard(
+            GvCompanyRules.MeetingType.AGM, INVITATION, CID, _one("Accounts", GvCompanyRules.ResolutionClass.Ordinary)
+        );
+        assertEq(
+            assemblyGv.meeting(id).noticeDeadline - assemblyGv.meeting(id).convenedAt,
+            rules.noticePeriod(GvCompanyRules.MeetingType.AGM)
+        );
+        assertEq(uint8(assemblyGv.meeting(id).meetingType), uint8(GvCompanyRules.MeetingType.AGM));
+    }
+
+    function test_articles_outcome_uses_the_resolution_class() public {
+        vm.prank(issuer);
+        share.transfer(alice, 60);
+        vm.prank(issuer);
+        share.transfer(bob, 40);
+        _delegate(alice);
+        _delegate(bob);
+
+        GvAssembly.AgendaItem[] memory agenda = new GvAssembly.AgendaItem[](2);
+        agenda[0] = GvAssembly.AgendaItem({
+            title: "Ordinary", documentHash: keccak256("ordinary"), class: GvCompanyRules.ResolutionClass.Ordinary
+        });
+        agenda[1] = GvAssembly.AgendaItem({
+            title: "Statute", documentHash: keccak256("statute"), class: GvCompanyRules.ResolutionClass.Qualified
+        });
+        assemblyGv.setDirector(director, true);
+        vm.prank(director);
+        uint256 meetingId = assemblyGv.conveneByBoard(GvCompanyRules.MeetingType.EGM, INVITATION, CID, agenda);
+        vm.warp(assemblyGv.meeting(meetingId).noticeDeadline);
+        assemblyGv.openMeeting(meetingId);
+
+        address[] memory targets = new address[](1);
+        targets[0] = address(governor);
+        uint256[] memory values = new uint256[](1);
+        bytes[] memory calldatas = new bytes[](1);
+        calldatas[0] = abi.encodeCall(GovernorSettings.setVotingDelay, (uint48(2)));
+        vm.prank(alice);
+        uint256 proposalId = governor.propose(targets, values, calldatas, "Class check");
+        vm.warp(governor.proposalSnapshot(proposalId) + 1);
+        vm.prank(alice);
+        governor.castVote(proposalId, 1);
+        vm.prank(bob);
+        governor.castVote(proposalId, 0);
+        vm.warp(governor.proposalDeadline(proposalId) + 1);
+
+        vm.prank(alice);
+        assemblyGv.bindProposal(meetingId, 0, proposalId);
+        vm.prank(alice);
+        assemblyGv.bindProposal(meetingId, 1, proposalId);
+
+        (bool ordinaryQuorum, bool ordinaryMajority,,,,) = assemblyGv.articlesOutcome(meetingId, 0, proposalId);
+        (bool qualifiedQuorum, bool qualifiedMajority, uint256 forVotes, uint256 againstVotes,,) =
+            assemblyGv.articlesOutcome(meetingId, 1, proposalId);
+        assertEq(forVotes, 60);
+        assertEq(againstVotes, 40);
+        assertTrue(ordinaryQuorum);
+        assertTrue(ordinaryMajority);
+        assertTrue(qualifiedQuorum);
+        assertFalse(qualifiedMajority);
+    }
+
+    function test_information_request_starts_a_clock_and_overdue_items_are_queryable() public {
+        assemblyGv.setDirector(director, true);
+        vm.prank(issuer);
+        share.transfer(alice, 1);
+
+        vm.prank(stranger);
+        vm.expectPartialRevert(GvInformation.NotShareholder.selector);
+        info.fileRequest(keccak256("topic"), "Annual report");
+
+        vm.prank(alice);
+        uint256 requestId = info.fileRequest(keccak256("topic"), "Annual report");
+        assertEq(info.request(requestId).responseDeadline, uint64(block.timestamp) + rules.responseWindow());
+        assertFalse(info.isRequestOverdue(requestId));
+
+        bytes32 kind = keccak256("ANNUAL_REPORT");
+        vm.prank(director);
+        uint256 dutyId = info.schedulePublication(kind, uint64(block.timestamp) + 10);
+        vm.warp(block.timestamp + 11);
+        (uint256[] memory duties, uint256 nextDuty) = info.overduePublications(0, 10);
+        (uint256[] memory requests,) = info.overdueRequests(0, 10);
+        assertEq(duties.length, 1);
+        assertEq(duties[0], dutyId);
+        assertEq(nextDuty, info.dutyCount() + 1);
+        assertEq(requests.length, 0);
+
+        vm.warp(info.request(requestId).responseDeadline + 1);
+        (requests,) = info.overdueRequests(0, 10);
+        assertEq(requests.length, 1);
+        assertEq(requests[0], requestId);
+        vm.expectEmit(true, true, false, true, address(info));
+        emit GvInformation.ResponseOverdue(requestId, alice, info.request(requestId).responseDeadline);
+        info.notifyResponseOverdue(requestId);
+
+        bytes32 answer = keccak256("ciphertext-of-the-answer");
+        vm.prank(director);
+        info.answerRequest(requestId, answer, CID);
+        assertFalse(info.isRequestOverdue(requestId));
+        assertEq(info.request(requestId).answerHash, answer);
+        assertTrue(info.request(requestId).late);
+        assertEq(info.request(requestId).answerCid, CID);
+
+        vm.prank(director);
+        info.fulfillPublication(dutyId, keccak256("ciphertext-of-the-report"), CID);
+        assertFalse(info.isPublicationOverdue(dutyId));
+        assertTrue(info.duty(dutyId).late);
+        assertEq(info.duty(dutyId).documentHash, keccak256("ciphertext-of-the-report"));
+    }
+
+    function _delegate(address account) internal {
+        vm.prank(account);
+        share.delegate(account);
+        vm.warp(block.timestamp + 1);
+    }
+
+    function _one(string memory title, GvCompanyRules.ResolutionClass class)
+        internal
+        pure
+        returns (GvAssembly.AgendaItem[] memory agenda)
+    {
+        agenda = new GvAssembly.AgendaItem[](1);
+        agenda[0] = GvAssembly.AgendaItem({ title: title, documentHash: keccak256(bytes(title)), class: class });
+    }
+}

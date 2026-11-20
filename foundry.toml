@@ -17,6 +17,12 @@ gas_reports = [
     "GvDividend",
     "GvKitFactory",
     "GvDirectory",
+    "GvCompanyRules",
+    "GvAssembly",
+    "GvInformation",
+    "GvShareTerms",
+    "GvAcquisition",
+    "GvRecovery",
 ]
 
 [profile.default.fuzz]

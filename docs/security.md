@@ -1,6 +1,6 @@
 # Security
 
-**These contracts are unaudited.** They compose audited OpenZeppelin Contracts v5.6.1 blocks with new factory, dividend, wrapper, and directory code that has not had an independent review. Commission an external audit before an issuer relies on them for a real meeting or a real payment. A test suite, including a Base fork and a 5,000-holder claim simulation, is not a review.
+**These contracts are unaudited.** They compose audited OpenZeppelin Contracts v5.6.1 blocks with factory, dividend, wrapper, directory, meeting, rules, information, share-terms, acquisition, and recovery code that has not had an independent review. Commission an external audit before an issuer relies on them for a real meeting, a real transfer restriction, or a real payment. A test suite, including a Base fork and a 5,000-holder claim simulation, is not a review. The numbers in `GvCompanyRules` are placeholders, not legal advice. See [legal-wrapper.md](legal-wrapper.md).
 
 This is software. It is not investment advice, not an offer of securities, and not a statement that any person holds a financial-services or ECSP licence. The MIT text in the repository root is a copyright licence for the source code.
 
@@ -13,6 +13,10 @@ No contract in this repository was deployed to a live network as part of publish
 - CREATE2 salts and the initcode helpers. `predict` and `deploy` must stay on the same bytes.
 - The wrapper's `recover`. It is the timelock, and it must not be usable to seize tokens that holders deposited.
 - Timestamp-clock integration with `getPastVotes`. Proposer votes are read at `clock() - 1`.
+- `GvShare.moduleTransfer`. It skips the transfer policy. It must revert unless the caller is a module the timelock bound and that module reports the exact transfer as armed.
+- `GvAcquisition.convert` and `GvRecovery.executeRecovery`. They are the only intended callers of that force path. There should be no function that chooses an arbitrary recipient.
+- `GvShareTerms` whitelist and lock-up. The owner can block a transfer. The owner cannot seize a balance. Confirm ownership is the timelock before a live company relies on it.
+- Placeholder parameters. An audit should treat a shipped default as unreviewed software, not as a statutory figure.
 
 ## Properties the tests cover
 
@@ -27,6 +31,12 @@ No contract in this repository was deployed to a live network as part of publish
 - A stranger cannot call a deployer.
 - 5,000 claims pay the full allocation and the claim gas does not grow with the index.
 - On a Base fork, with `BASE_RPC_URL` set: propose, vote, queue, execute, fund canonical Base USDC, and claim. The fork test is skipped when the variable is unset.
+- An EGM convened by a director, and an EGM convened by a shareholder at the threshold and by holders combining support. The invitation event carries a hash and a CID, and the meeting cannot open during the notice.
+- `articlesOutcome` passes an ordinary majority and fails a qualified majority on the same votes.
+- A publication and an information request become overdue, then stop being overdue once a hash is stored.
+- A recipient must be whitelisted and must have accepted the current SHA version. A lock-up blocks the holder until it expires. Pre-emption caps are pro rata. A stake at the tag threshold cannot use pre-emption.
+- A drag at the placeholder quorum converts every holder at the same price. Below quorum, the buyer is refunded and acceptors reclaim. A tag sale waits out its window and pays the same price pro rata.
+- Recovery cannot execute before the delay. The holder can cancel a board resolution and cannot cancel a court-order path. A stranger cannot call `moduleTransfer`. The timelock is the only address that can set the policy.
 
 ## Open decisions
 
@@ -49,7 +59,12 @@ These are choices, not leftovers. An audit should treat them as intended unless 
 | Surplus | `recoverSurplus` sends `balance - reserved` and cannot touch funded-but-unclaimed tokens. |
 | Directory | Self-asserted. It does not prove the factory deployed the listed contracts. The kit works with an empty directory. |
 | Leaf | `keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))))`, sorted pairs, odd nodes promoted. Same double hash as OpenZeppelin's `StandardMerkleTree`. |
-| Allowlist | None. The contracts do not check identity. A CMTAT rule engine, if any, stays on the issuer's token. |
+| Allowlist | None until the timelock sets a transfer policy. `GvShareTerms` then enforces a whitelist, SHA acceptance, lock-ups, and pre-emption. A CMTAT rule engine, if any, stays on the issuer's underlying token. |
+| Articles quorum | `GvGovernor` is unchanged and still has one quorum. `GvAssembly.articlesOutcome` applies the ordinary or qualified figures. The articles have to say which check governs. |
+| Placeholders | `PLACEHOLDER_*` values are software defaults. They are not a reading of the PGR or the TVTG. |
+| Drag and tag | `GvAcquisition` has no owner. Drag converts holders only after an acceptance quorum, and only to the buyer who escrowed. Tag is an explicit sale, not every transfer. |
+| Recovery | One delayed transfer, one hash, events. A board-resolution recovery can be cancelled by the holder. A court-order recovery cannot. The timelock can cancel either. The hash is not verified against a document. |
+| Force path | `moduleTransfer` cannot mint or burn. It calls the module's `mayForceTransfer` for that exact from, to, and amount. |
 | Factory shape | Five deployer contracts, then the factory, because one contract that embedded every creation code would exceed the EIP-3860 initcode limit. |
 | Governor code size | `GvGovernor` is the OpenZeppelin wizard set and nothing else. The deployer runtime margin over the 24,576-byte limit is a few thousand bytes. Do not add code to the governor without rechecking `forge build --sizes`. |
 | Timelock change | `updateTimelock` remains OpenZeppelin's `onlyGovernance` function. The share minter and the dividend's timelock are immutable. They do not follow a governor timelock change. A change of timelock needs a new dividend and a new share if those must match. |
@@ -59,7 +74,7 @@ These are choices, not leftovers. An audit should treat them as intended unless 
 
 ## Out of scope
 
-Identity, KYC, shareholder registers, corporate-law formality, tax, and whether a particular token is a security. A successful on-chain proposal is a state change in these contracts. It does not, by itself, complete an off-chain legal step.
+Identity, KYC, the Aktienbuch, corporate-law formality, tax, TVTG registration, and whether a particular token is a security. A successful on-chain proposal is a state change in these contracts. It does not, by itself, complete an off-chain legal step. The open questions for a Liechtenstein lawyer are listed in [legal-wrapper.md](legal-wrapper.md).
 
 ## Reporting
 

@@ -5,6 +5,7 @@ import { ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { ERC20Permit } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import { ERC20Votes } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Votes.sol";
 import { Nonces } from "@openzeppelin/contracts/utils/Nonces.sol";
+import { IGvShareModule, IGvSharePolicy } from "./interfaces/IGvSharePolicy.sol";
 
 /**
  * @title GvShare
@@ -18,16 +19,33 @@ import { Nonces } from "@openzeppelin/contracts/utils/Nonces.sol";
  *
  * This contract is not a CMTAT. A CMTAT v3 token does not implement ERC-5805. Use
  * {GvVotesWrapper} around that token, or pass an existing timestamp votes token into the factory.
+ *
+ * Transfer policy and share modules are optional and unset at deployment. With neither set, transfers
+ * behave as a plain votes token, which is what the original kit tests rely on. The timelock, and only
+ * the timelock, can point them at {GvShareTerms}, {GvAcquisition}, and {GvRecovery}. Those contracts
+ * belong to the issuer. This token never grants a role to a registry or to InvestHub.
  */
 contract GvShare is ERC20, ERC20Permit, ERC20Votes {
     address public immutable timelock;
 
     uint8 private immutable _decimals;
 
+    /// @notice When set, every ordinary mint and transfer asks this contract. Zero keeps the token open.
+    address public transferPolicy;
+
+    /// @notice Modules that may call {moduleTransfer}. The timelock binds them. Unset means nobody can.
+    mapping(address module => bool allowed) public shareModules;
+
     error OnlyTimelock(address caller);
     error ZeroAddress();
     error EmptyString();
     error InvalidDecimals(uint8 decimals);
+    error NotShareModule(address caller);
+    error InvalidModuleTransfer();
+    error ForceNotAuthorized(address from, address to, uint256 amount);
+
+    event TransferPolicySet(address indexed policy);
+    event ShareModuleSet(address indexed module, bool allowed);
 
     /**
      * @param issuer Receives `initialSupply`. This is the issuer's own wallet or multisig.
@@ -62,6 +80,37 @@ contract GvShare is ERC20, ERC20Permit, ERC20Votes {
         _mint(to, amount);
     }
 
+    /// @notice Point ordinary transfers at a policy such as {GvShareTerms}. Pass zero to clear it.
+    /// Timelock only, which means an executed proposal once the kit is wired.
+    function setTransferPolicy(address policy) external {
+        if (msg.sender != timelock) revert OnlyTimelock(msg.sender);
+        transferPolicy = policy;
+        emit TransferPolicySet(policy);
+    }
+
+    /// @notice Allow or remove a module that can call {moduleTransfer}. Timelock only.
+    function setShareModule(address module, bool allowed) external {
+        if (msg.sender != timelock) revert OnlyTimelock(msg.sender);
+        if (module == address(0)) revert ZeroAddress();
+        shareModules[module] = allowed;
+        emit ShareModuleSet(module, allowed);
+    }
+
+    /**
+     * @notice Move shares for a bound module, skipping the transfer policy.
+     * This is not a general admin function. The caller must be a module the timelock bound, and that
+     * module must report that this exact transfer is the one its own function just armed. Mint and burn
+     * are rejected here. Drag conversion and matured recovery are the intended callers.
+     */
+    function moduleTransfer(address from, address to, uint256 amount) external {
+        if (!shareModules[msg.sender]) revert NotShareModule(msg.sender);
+        if (from == address(0) || to == address(0) || amount == 0) revert InvalidModuleTransfer();
+        if (!IGvShareModule(msg.sender).mayForceTransfer(from, to, amount)) {
+            revert ForceNotAuthorized(from, to, amount);
+        }
+        super._update(from, to, amount);
+    }
+
     /// @dev ERC-6372 timestamp clock. Voting delay and period are seconds.
     function clock() public view override returns (uint48) {
         return uint48(block.timestamp);
@@ -74,6 +123,9 @@ contract GvShare is ERC20, ERC20Permit, ERC20Votes {
     }
 
     function _update(address from, address to, uint256 value) internal override(ERC20, ERC20Votes) {
+        if (transferPolicy != address(0)) {
+            IGvSharePolicy(transferPolicy).authorizeTransfer(from, to, value);
+        }
         super._update(from, to, value);
     }
 

@@ -280,3 +280,13 @@ If a verifier asks for the EVM version, it is `prague`.
 - `directory.get(issuer)`, if someone registered.
 
 No InvestHub API is required for any of those reads.
+
+## 10. Articles, invitations, and share terms
+
+The governor is still the ballot. The company deploys the extra contracts itself. `script/DeployIssuerTerms.s.sol` does that only when `GV_CONFIRM` is `deploy-gv-terms` and you pass `--broadcast` yourself. It does not set the share token's policy. Only the timelock can call `setTransferPolicy` and `setShareModule`, which means an executed proposal.
+
+Until that proposal, the share token transfers as before. After it, a recipient needs to be whitelisted and to have called `acceptSha` for the current SHA hash. Read [legal-wrapper.md](legal-wrapper.md) before treating any stored number as a statutory figure. The defaults are placeholders.
+
+An off-chain notifier subscribes to `InvitationNotice` on `GvAssembly`. The log has the meeting type, the notice deadline, the invitation hash, and an optional CID. It has no email address. The notifier looks up holders from the share token and addresses from the company's own register. The meeting can be opened by anyone after the notice, whether or not a mail was sent.
+
+`GvCompanyRules`, `GvAssembly`, and `GvShareTerms` are owned by the broadcaster of the terms script. Transfer that ownership to the timelock if a single key should not be able to retune quorums, directors, or the whitelist. `GvAcquisition` has no owner. `GvRecovery` proposes transfers only through directors, and only after the delay.
