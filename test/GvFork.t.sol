@@ -12,13 +12,7 @@ import { GvDividend } from "../src/GvDividend.sol";
 import { GvGovernor } from "../src/GvGovernor.sol";
 import { GvKitFactory } from "../src/GvKitFactory.sol";
 import { GvShare } from "../src/GvShare.sol";
-import {
-    GvDividendDeployer,
-    GvGovernorDeployer,
-    GvShareDeployer,
-    GvTimelockDeployer,
-    GvVotesWrapperDeployer
-} from "../src/deployers/GvDeployers.sol";
+import { GvFactoryBootstrap } from "../script/GvFactoryBootstrap.sol";
 import { MerkleBuilder } from "./MerkleBuilder.sol";
 import { MockERC20 } from "./mocks/MockERC20.sol";
 
@@ -44,14 +38,7 @@ contract GvForkTest is Test {
     }
 
     function _deployFactory() internal returns (GvKitFactory deployed) {
-        uint256 nonce = vm.getNonce(address(this));
-        address predicted = vm.computeCreateAddress(address(this), nonce + 5);
-        GvShareDeployer shareD = new GvShareDeployer(predicted);
-        GvVotesWrapperDeployer wrapD = new GvVotesWrapperDeployer(predicted);
-        GvTimelockDeployer timeD = new GvTimelockDeployer(predicted);
-        GvGovernorDeployer govD = new GvGovernorDeployer(predicted);
-        GvDividendDeployer divD = new GvDividendDeployer(predicted);
-        deployed = new GvKitFactory(shareD, wrapD, timeD, govD, divD);
+        deployed = GvFactoryBootstrap.deploy(vm, address(this));
     }
 
     function _assertBase() internal view {

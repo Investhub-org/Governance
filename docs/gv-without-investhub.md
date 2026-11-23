@@ -8,11 +8,13 @@ Compiler settings, if you verify or rebuild: solc **0.8.28**, optimizer **on**, 
 
 ## 0. Nothing here broadcasts by itself
 
-Both forge scripts revert unless `DEPLOYER_PRIVATE_KEY` is set and `GV_CONFIRM` is the exact string named below. Foundry still only sends transactions if you add `--broadcast`. Leave the key out of git. Do not commit `.env`.
+The forge scripts revert unless `DEPLOYER_PRIVATE_KEY` is set and `GV_CONFIRM` is the exact string named below. Foundry still only sends transactions if you add `--broadcast`. Leave the key out of git. Do not commit `.env`. Later `cast` examples use `$BASE_RPC_URL`. Set that to the same Anvil node or public testnet.
 
 Copy `.env.example` to `.env` locally if you want. The example values for delays are starting points an issuer edits. They are not a default deployment.
 
-Do not send any other transaction from the deployer key while `DeployInfrastructure` runs. The factory address is `CREATE` at nonce + 5.
+Do not send any other transaction from the deployer key while `DeployInfrastructure` runs. The factory address is `CREATE` at nonce + 11.
+
+The forge scripts call `GvChainGuard` before they read the key. Allowed chain ids are 31337 (Anvil), 1337, 84532 (Base Sepolia), 11155111 (Sepolia), 11155420 (OP Sepolia), 421614 (Arbitrum Sepolia), and 80002 (Polygon Amoy). Every other id reverts, including Ethereum mainnet and Base mainnet. There is no override. Point `--rpc-url` at Anvil (`http://127.0.0.1:8545`) or at a public testnet such as `https://sepolia.base.org`.
 
 ## 1. Deploy the factory and the directory
 
@@ -21,14 +23,15 @@ Once per chain is enough. Later issuers call the same factory. The directory is 
 ```bash
 export DEPLOYER_PRIVATE_KEY=0x…          # your key, never a committed value
 export GV_CONFIRM=deploy-gv-infrastructure
-export BASE_RPC_URL=https://mainnet.base.org
 
 forge script script/DeployInfrastructure.s.sol \
-  --rpc-url "$BASE_RPC_URL" \
+  --rpc-url http://127.0.0.1:8545 \
   --broadcast
 ```
 
-The log lists `shareDeployer`, `wrapperDeployer`, `timelockDeployer`, `governorDeployer`, `dividendDeployer`, `factory`, and `directory`. Keep the five deployer addresses. Verification needs them as the factory's constructor arguments.
+For Base Sepolia, use `--rpc-url https://sepolia.base.org`. The script reverts on Base mainnet.
+
+The log lists the eleven deployers (`share`, `wrapper`, `timelock`, `governor`, `dividend`, `rules`, `assembly`, `information`, `terms`, `acquisition`, `recovery`), then `factory` and `directory`. Keep the deployer addresses. Verification needs them as the factory's constructor arguments, in that order.
 
 Simulate first by omitting `--broadcast`. You still must set the key and `GV_CONFIRM`, because the script refuses to impersonate a default account.
 
@@ -48,7 +51,7 @@ CMTAT v3 does not implement ERC-5805. Passing it as `votes` reverts. Wrap it.
 
 ```bash
 export GV_CONFIRM=deploy-gv-kit
-export GV_FACTORY=0x…                    # from step 1
+export GV_FACTORY=0x…                    # from step 1, on the same local node or testnet
 export GV_TOKEN_MODE=native
 export GV_NAME="Example Shares"
 export GV_SYMBOL=EXS
@@ -64,9 +67,26 @@ export GV_METADATA_URI="ipfs://…"        # public description, max 1024 bytes
 export GV_SALT=0x…                       # bytes32, chosen by the issuer
 
 forge script script/DeployIssuerKit.s.sol \
-  --rpc-url "$BASE_RPC_URL" \
+  --rpc-url http://127.0.0.1:8545 \
   --broadcast
 ```
+
+### Full issuer set
+
+`script/DeployIssuerSet.s.sol` calls `deploySet`. It deploys a native share plus the six rule modules in one transaction, wires the articles gate and the acquisition pointer, and clears the factory's one-time rights. It does not set the transfer policy or the share modules. Wrap mode and an existing votes token stay on the kit script above.
+
+`GV_CONFIRM` is `deploy-gv-issuer-set`. `GV_CONSIDERATION` is an ERC-20 that already has code on that chain. The factory does not deploy it. The same chain guard applies.
+
+```bash
+export GV_CONFIRM=deploy-gv-issuer-set
+export GV_CONSIDERATION=0x…              # existing ERC-20, not a wallet
+
+forge script script/DeployIssuerSet.s.sol \
+  --rpc-url http://127.0.0.1:8545 \
+  --broadcast
+```
+
+The script logs `predictSet` and reverts if `deploySet` disagrees. The factory also emits `IssuerSetDeployed` with the six module addresses.
 
 `predict` uses the same issuer, spec, and salt. The script logs the predicted addresses and reverts the simulation if `deploy` disagrees. The factory emits:
 
@@ -207,20 +227,20 @@ cast send "$DIVIDEND" \
 
 After `deadline`, a second proposal calls `sweep(epoch, to)` on the dividend. Only the timelock can sweep, and only once. The amount is `funded - claimed`. Tokens that someone transferred in without calling `fund` are not part of that amount. The timelock can recover them with `recoverSurplus(token, to)`, which sends `balance - reserved` and cannot take a funded epoch's remaining tokens.
 
-## 8. Verify on Basescan and Sourcify
+## 8. Verify on a testnet explorer and Sourcify
 
-Verify the exact compiler settings above. A mismatch of optimizer runs or EVM version produces different bytecode.
-
-Basescan (API v1 endpoint, key in `BASESCAN_API_KEY`):
+Verify the exact compiler settings above. A mismatch of optimizer runs or EVM version produces different bytecode. The commands below use Base Sepolia, chain id 84532, which is a chain the scripts allow. They do not target chain id 8453.
 
 ```bash
 FACTORY_ARGS=$(cast abi-encode \
-  "constructor(address,address,address,address,address)" \
+  "constructor(address,address,address,address,address,address,address,address,address,address,address)" \
   "$SHARE_DEPLOYER" "$WRAPPER_DEPLOYER" "$TIMELOCK_DEPLOYER" \
-  "$GOVERNOR_DEPLOYER" "$DIVIDEND_DEPLOYER")
+  "$GOVERNOR_DEPLOYER" "$DIVIDEND_DEPLOYER" \
+  "$RULES_DEPLOYER" "$ASSEMBLY_DEPLOYER" "$INFORMATION_DEPLOYER" \
+  "$TERMS_DEPLOYER" "$ACQUISITION_DEPLOYER" "$RECOVERY_DEPLOYER")
 
 forge verify-contract \
-  --chain 8453 \
+  --chain 84532 \
   --verifier etherscan \
   --etherscan-api-key "$BASESCAN_API_KEY" \
   --compiler-version 0.8.28 \
@@ -234,7 +254,7 @@ forge verify-contract \
 Each deployer takes the factory address as its only constructor argument:
 
 ```bash
-forge verify-contract --chain 8453 --verifier etherscan \
+forge verify-contract --chain 84532 --verifier etherscan \
   --etherscan-api-key "$BASESCAN_API_KEY" \
   --compiler-version 0.8.28 --optimizer-runs 200 --watch \
   "$SHARE_DEPLOYER" \
@@ -242,7 +262,7 @@ forge verify-contract --chain 8453 --verifier etherscan \
   --constructor-args "$(cast abi-encode "constructor(address)" "$FACTORY")"
 ```
 
-Repeat for `GvVotesWrapperDeployer`, `GvTimelockDeployer`, `GvGovernorDeployer`, and `GvDividendDeployer` in that file.
+Repeat for `GvVotesWrapperDeployer`, `GvTimelockDeployer`, `GvGovernorDeployer`, and `GvDividendDeployer` in that file, and for `GvCompanyRulesDeployer`, `GvAssemblyDeployer`, `GvInformationDeployer`, `GvShareTermsDeployer`, `GvAcquisitionDeployer`, and `GvRecoveryDeployer` in `src/deployers/GvModuleDeployers.sol`.
 
 The kit contracts are created by those deployers. Verify each with the constructor arguments that were used:
 
@@ -261,7 +281,7 @@ Sourcify uses the same artifacts. Swap the verifier:
 
 ```bash
 forge verify-contract \
-  --chain 8453 \
+  --chain 84532 \
   --verifier sourcify \
   --compiler-version 0.8.28 \
   --optimizer-runs 200 \
@@ -274,7 +294,7 @@ If a verifier asks for the EVM version, it is `prague`.
 
 ## 9. What you can read on-chain without an account
 
-- `IssuerKitDeployed` logs on the factory, and `deploymentByGovernor(governor)`.
+- `IssuerKitDeployed` and `IssuerSetDeployed` logs on the factory, and `deploymentByGovernor(governor)`.
 - `governor.timelock()`, `votingDelay()`, `votingPeriod()`, `quorumNumerator()`, `proposalThreshold()`, `state(id)`, `proposalVotes(id)`.
 - `dividend.distribution(epoch)` and `isClaimed(epoch, index)`.
 - `directory.get(issuer)`, if someone registered.
@@ -283,7 +303,9 @@ No InvestHub API is required for any of those reads.
 
 ## 10. Articles, invitations, and share terms
 
-The governor is still the ballot. The company deploys the extra contracts itself. `script/DeployIssuerTerms.s.sol` does that only when `GV_CONFIRM` is `deploy-gv-terms` and you pass `--broadcast` yourself. It does not set the share token's policy. Only the timelock can call `setTransferPolicy` and `setShareModule`, which means an executed proposal.
+The governor is still the ballot. `deploySet` creates the extra contracts and points the governor at the assembly and the terms at the acquisition. It does not set the share token's policy. Only the timelock can call `setTransferPolicy` and `setShareModule`, which means an executed proposal.
+
+`script/DeployIssuerTerms.s.sol` is the path for a kit that was created with `deploy` (wrap mode, an existing votes token, or a kit deployed before `deploySet`). It runs only when `GV_CONFIRM` is `deploy-gv-terms` and you pass `--broadcast` yourself. The same chain guard applies. It does not set the share token's policy either.
 
 Until that proposal, the share token transfers as before. After it, a recipient needs to be whitelisted and to have accepted the current SHA hash, by `acceptSha`, by a relayed EIP-712 signature, or by a Merkle proof that stores the same acceptance. A mint and a transfer from the configured treasury skip pre-emption and emit `PrimaryIssuance`. Read [legal-wrapper.md](legal-wrapper.md) before treating any stored number as a statutory figure. The defaults are placeholders.
 

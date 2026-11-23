@@ -12,13 +12,7 @@ import { GvDividend } from "../src/GvDividend.sol";
 import { GvGovernor } from "../src/GvGovernor.sol";
 import { GvKitFactory } from "../src/GvKitFactory.sol";
 import { GvShare } from "../src/GvShare.sol";
-import {
-    GvDividendDeployer,
-    GvGovernorDeployer,
-    GvShareDeployer,
-    GvTimelockDeployer,
-    GvVotesWrapperDeployer
-} from "../src/deployers/GvDeployers.sol";
+import { GvFactoryBootstrap } from "../script/GvFactoryBootstrap.sol";
 
 abstract contract KitFixture is Test {
     GvKitFactory internal factory;
@@ -29,17 +23,9 @@ abstract contract KitFixture is Test {
         directory = new GvDirectory();
     }
 
-    /// @dev Five deployer transactions, then the factory. One initcode would exceed EIP-3860.
+    /// @dev Eleven deployer transactions, then the factory. One initcode would exceed EIP-3860.
     function _deployFactory() internal returns (GvKitFactory deployed) {
-        uint256 nonce = vm.getNonce(address(this));
-        address predicted = vm.computeCreateAddress(address(this), nonce + 5);
-        GvShareDeployer shareD = new GvShareDeployer(predicted);
-        GvVotesWrapperDeployer wrapD = new GvVotesWrapperDeployer(predicted);
-        GvTimelockDeployer timeD = new GvTimelockDeployer(predicted);
-        GvGovernorDeployer govD = new GvGovernorDeployer(predicted);
-        GvDividendDeployer divD = new GvDividendDeployer(predicted);
-        deployed = new GvKitFactory(shareD, wrapD, timeD, govD, divD);
-        assertEq(address(deployed), predicted);
+        deployed = GvFactoryBootstrap.deploy(vm, address(this));
     }
 
     function _nativeSpec(uint256 supply) internal pure returns (GvKitFactory.ShareSpec memory) {
