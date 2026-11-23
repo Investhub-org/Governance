@@ -20,7 +20,7 @@ contract GvTermsWireTest is KitFixture {
         GvShare share = GvShare(shareAddr);
         MockERC20 usdc = new MockERC20("USD Coin", "USDC", 6);
         GvCompanyRules rules = new GvCompanyRules(address(this));
-        GvShareTerms terms = new GvShareTerms(address(this), share, rules, address(usdc));
+        GvShareTerms terms = new GvShareTerms(address(this), share, rules, address(usdc), address(0));
 
         vm.prank(stranger);
         vm.expectPartialRevert(GvShare.OnlyTimelock.selector);

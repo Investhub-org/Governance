@@ -17,13 +17,7 @@ import { GvKitFactory } from "../../src/GvKitFactory.sol";
 import { GvRecovery } from "../../src/GvRecovery.sol";
 import { GvShare } from "../../src/GvShare.sol";
 import { GvShareTerms } from "../../src/GvShareTerms.sol";
-import {
-    GvDividendDeployer,
-    GvGovernorDeployer,
-    GvShareDeployer,
-    GvTimelockDeployer,
-    GvVotesWrapperDeployer
-} from "../../src/deployers/GvDeployers.sol";
+import { GvFactoryBootstrap } from "../GvFactoryBootstrap.sol";
 import { MerkleBuilder } from "../../test/MerkleBuilder.sol";
 import { MockERC20 } from "../../test/mocks/MockERC20.sol";
 import { InvestorBook } from "./InvestorBook.sol";
@@ -190,30 +184,13 @@ contract LifecycleSim is Test {
     function _deployInfrastructure() internal {
         vm.startPrank(issuer);
         uint256 nonce = vm.getNonce(issuer);
-        address predicted = vm.computeCreateAddress(issuer, nonce + 5);
-        uint256 gasUsed;
-        new GvShareDeployer(predicted);
-        gasUsed = _gas();
-        new GvVotesWrapperDeployer(predicted);
-        gasUsed += _gas();
-        new GvTimelockDeployer(predicted);
-        gasUsed += _gas();
-        new GvGovernorDeployer(predicted);
-        gasUsed += _gas();
-        new GvDividendDeployer(predicted);
-        gasUsed += _gas();
-        factory = new GvKitFactory(
-            GvShareDeployer(vm.computeCreateAddress(issuer, nonce)),
-            GvVotesWrapperDeployer(vm.computeCreateAddress(issuer, nonce + 1)),
-            GvTimelockDeployer(vm.computeCreateAddress(issuer, nonce + 2)),
-            GvGovernorDeployer(vm.computeCreateAddress(issuer, nonce + 3)),
-            GvDividendDeployer(vm.computeCreateAddress(issuer, nonce + 4))
-        );
-        gasUsed += _gas();
+        uint256 before = gasleft();
+        factory = GvFactoryBootstrap.deploy(vm, issuer);
+        uint256 gasUsed = before - gasleft();
         directory = new GvDirectory();
         gasUsed += _gas();
         vm.stopPrank();
-        assertEq(address(factory), predicted);
+        assertEq(address(factory), vm.computeCreateAddress(issuer, nonce + 11));
         _add("infrastructure", gasUsed);
     }
 
@@ -264,7 +241,7 @@ contract LifecycleSim is Test {
         gasUsed += _gas();
         info = new GvInformation(share, rules, assemblyGv);
         gasUsed += _gas();
-        terms = new GvShareTerms(issuer, share, rules, address(usdc));
+        terms = new GvShareTerms(issuer, share, rules, address(usdc), address(0));
         gasUsed += _gas();
         rules.setUnclaimedRecipient(reserve);
         gasUsed += _gas();

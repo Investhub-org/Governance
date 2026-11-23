@@ -39,7 +39,7 @@ contract GvAcquisitionTest is Test {
         timelock = new TimelockController(1, empty, empty, address(this));
         GvGovernor governor = new GvGovernor("Example Governor", share, timelock, 1, 3600, 1, 4);
         GvAssembly assemblyGv = new GvAssembly(address(this), share, rules, governor);
-        terms = new GvShareTerms(address(this), share, rules, address(usdc));
+        terms = new GvShareTerms(address(this), share, rules, address(usdc), address(0));
         acquisition = new GvAcquisition(share, rules, terms);
         recovery = new GvRecovery(share, rules, terms, assemblyGv, address(timelock));
         terms.setAcquisition(address(acquisition));

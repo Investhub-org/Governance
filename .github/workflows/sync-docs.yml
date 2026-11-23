@@ -1,0 +1,47 @@
+name: sync-docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/sync-docs.yml"
+      - ".github/scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the docs sync token
+        env:
+          DOCS_SYNC_TOKEN: ${{ secrets.DOCS_SYNC_TOKEN }}
+        run: |
+          if [ -z "$DOCS_SYNC_TOKEN" ]; then
+            echo "::error::Repository secret DOCS_SYNC_TOKEN is unset. Add it on Investhub-org/Governance. See docs/publishing.md. It is a repository secret, not an environment secret."
+            exit 1
+          fi
+
+      - name: Checkout governance
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Checkout the docs site
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Investhub-org/docs
+          ref: main
+          path: site
+          token: ${{ secrets.DOCS_SYNC_TOKEN }}
+          persist-credentials: true
+
+      - name: Open a pull request on Investhub-org/docs
+        env:
+          DOCS_SYNC_TOKEN: ${{ secrets.DOCS_SYNC_TOKEN }}
+          GH_TOKEN: ${{ secrets.DOCS_SYNC_TOKEN }}
+        run: bash .github/scripts/sync-governance-docs.sh

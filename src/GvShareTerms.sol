@@ -19,6 +19,10 @@ import { IGvSharePolicy, IGvTransferPermit } from "./interfaces/IGvSharePolicy.s
  * someone else's shares. Forced moves live in {GvAcquisition} and {GvRecovery}, and only after the
  * timelock has bound those contracts as share modules.
  *
+ * {acquisitionBinder} is an optional one-time caller, used by {GvKitFactory.deploySet} to store the
+ * acquisition address in the deployment transaction. The binder is cleared by that call. It cannot
+ * change a value that is already set, and it is not the owner.
+ *
  * Holders accept the current SHA version before they can receive shares. The SHA text stays off-chain.
  * The chain stores the keccak256 hash, a version, and an optional CID. Acceptance is stored per account.
  * The holder can call {acceptSha}, a relayer can submit their EIP-712 signature, or anyone can submit a
@@ -59,6 +63,8 @@ contract GvShareTerms is Ownable, GvEscrow, EIP712, IGvSharePolicy {
     GvCompanyRules public immutable rules;
 
     address public acquisition;
+    /// @notice One-time caller allowed to set {acquisition} while it is still zero. Cleared by that call.
+    address public acquisitionBinder;
     address public consideration;
     bool public preEmptionEnabled = true;
 
@@ -133,10 +139,13 @@ contract GvShareTerms is Ownable, GvEscrow, EIP712, IGvSharePolicy {
     event PreEmptionSettled(uint256 indexed id, address indexed buyer, uint256 amount, uint256 cost);
     event PreEmptionReturned(uint256 indexed id, address indexed seller, uint256 amount);
 
-    constructor(address issuer, GvShare token_, GvCompanyRules rules_, address consideration_)
-        Ownable(issuer)
-        EIP712("GvShareTerms", "1")
-    {
+    constructor(
+        address issuer,
+        GvShare token_,
+        GvCompanyRules rules_,
+        address consideration_,
+        address acquisitionBinder_
+    ) Ownable(issuer) EIP712("GvShareTerms", "1") {
         if (address(token_) == address(0) || address(rules_) == address(0) || consideration_ == address(0)) {
             revert ZeroAddress();
         }
@@ -144,6 +153,7 @@ contract GvShareTerms is Ownable, GvEscrow, EIP712, IGvSharePolicy {
         token = token_;
         rules = rules_;
         consideration = consideration_;
+        acquisitionBinder = acquisitionBinder_;
     }
 
     function preEmption(uint256 id) external view returns (PreEmption memory) {
@@ -242,8 +252,17 @@ contract GvShareTerms is Ownable, GvEscrow, EIP712, IGvSharePolicy {
         emit ConsiderationSet(currency);
     }
 
-    function setAcquisition(address acquisition_) external onlyOwner {
+    /**
+     * @notice Store the acquisition contract. The owner can set or replace it.
+     * {acquisitionBinder} can set it once, and only while it is still zero. That call clears the binder.
+     */
+    function setAcquisition(address acquisition_) external {
         if (acquisition_ == address(0)) revert ZeroAddress();
+        bool ownerCall = msg.sender == owner();
+        bool binderCall =
+            acquisitionBinder != address(0) && msg.sender == acquisitionBinder && acquisition == address(0);
+        if (!ownerCall && !binderCall) revert OwnableUnauthorizedAccount(msg.sender);
+        if (binderCall) acquisitionBinder = address(0);
         acquisition = acquisition_;
         emit AcquisitionSet(acquisition_);
     }

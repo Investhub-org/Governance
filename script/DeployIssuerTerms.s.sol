@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import { Script, console2 } from "forge-std/Script.sol";
+import { GvChainGuard } from "./GvChainGuard.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { GvAcquisition } from "../src/GvAcquisition.sol";
 import { GvAssembly } from "../src/GvAssembly.sol";
@@ -30,6 +31,7 @@ import { GvShareTerms } from "../src/GvShareTerms.sol";
  */
 contract DeployIssuerTerms is Script {
     function run() external {
+        GvChainGuard.requireLocalOrTestnet();
         uint256 pk = vm.envUint("DEPLOYER_PRIVATE_KEY");
         _requireConfirm(vm.envString("GV_CONFIRM"));
         address issuer = vm.addr(pk);
@@ -55,7 +57,7 @@ contract DeployIssuerTerms is Script {
         GvCompanyRules rules = new GvCompanyRules(issuer);
         GvAssembly assemblyGv = new GvAssembly(issuer, IERC20(address(share)), rules, governor);
         GvInformation info = new GvInformation(IERC20(address(share)), rules, assemblyGv);
-        GvShareTerms terms = new GvShareTerms(issuer, share, rules, consideration);
+        GvShareTerms terms = new GvShareTerms(issuer, share, rules, consideration, address(0));
         GvAcquisition acquisition = new GvAcquisition(share, rules, terms);
         terms.setAcquisition(address(acquisition));
         GvRecovery recovery = new GvRecovery(share, rules, terms, assemblyGv, timelock);

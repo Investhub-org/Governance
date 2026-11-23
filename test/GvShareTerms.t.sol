@@ -25,7 +25,7 @@ contract GvShareTermsTest is Test {
         usdc = new MockERC20("USD Coin", "USDC", 6);
         share = new GvShare("Example Shares", "EXS", 0, issuer, 100, address(this));
         rules = new GvCompanyRules(address(this));
-        terms = new GvShareTerms(address(this), share, rules, address(usdc));
+        terms = new GvShareTerms(address(this), share, rules, address(usdc), address(0));
     }
 
     function test_receipt_requires_the_current_sha_and_the_whitelist() public {

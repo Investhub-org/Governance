@@ -36,8 +36,9 @@ import { TimelockController } from "@openzeppelin/contracts/governance/TimelockC
  * unless the mode is Governor.
  *
  * An unbound proposal is checked as a qualified resolution. Binding it to an agenda item uses the
- * strictest class it was bound to. The issuer recorded by the factory sets the gate once. After
- * that, only the timelock can replace it, and that replacement is itself checked by the current gate.
+ * strictest class it was bound to. The issuer recorded by the factory sets the gate once. The factory
+ * may set it in that same deployment transaction, then the wiring right is cleared. After the gate
+ * is set, only the timelock can replace it, and that replacement is itself checked by the current gate.
  *
  * The clock is not hardcoded here. It follows the votes token. Kit tokens use `mode=timestamp`,
  * so delay and period are seconds. There is no owner. The executor is the timelock.
@@ -62,6 +63,9 @@ contract GvGovernor is
     address public articlesIssuer;
     /// @notice Meeting contract that reads {GvCompanyRules.canonicalOutcome}. Zero blocks execution.
     address public articlesGate;
+    /// @notice Caller of {recognizeIssuer}, cleared when the gate is set or when that caller renounces.
+    /// The factory uses it inside {GvKitFactory.deploySet} and renounces it on a kit-only deploy.
+    address public articlesWirer;
 
     error ArticlesIssuerAlreadySet();
     error ArticlesIssuerZero();
@@ -72,6 +76,7 @@ contract GvGovernor is
 
     event ArticlesIssuerRecognized(address indexed issuer);
     event ArticlesGateSet(address indexed gate);
+    event ArticlesWirerCleared(address indexed wirer);
     constructor(
         string memory name_,
         IVotes token_,
@@ -93,23 +98,38 @@ contract GvGovernor is
         if (articlesIssuer != address(0)) revert ArticlesIssuerAlreadySet();
         if (issuer_ == address(0)) revert ArticlesIssuerZero();
         articlesIssuer = issuer_;
+        articlesWirer = msg.sender;
         emit ArticlesIssuerRecognized(issuer_);
     }
 
+    /// @notice Drop the one-time wiring right. The factory calls this when it does not deploy modules.
+    function renounceArticlesWirer() external {
+        if (msg.sender != articlesWirer) revert NotArticlesIssuer(msg.sender);
+        _clearWirer();
+    }
+
     /**
-     * @notice Point execution at the meeting contract. The issuer can set it while it is unset.
-     * After that, only the timelock can replace it, which means an executed proposal, and that
-     * proposal is checked by the gate already stored.
+     * @notice Point execution at the meeting contract. The issuer, or the one-time wirer, can set it
+     * while it is unset. The wirer is cleared in that call. After that, only the timelock can replace
+     * it, which means an executed proposal, and that proposal is checked by the gate already stored.
      */
     function setArticlesGate(address gate) external {
         if (gate == address(0)) revert ArticlesGateZero();
         if (articlesGate == address(0)) {
-            if (msg.sender != articlesIssuer) revert NotArticlesIssuer(msg.sender);
+            if (msg.sender != articlesIssuer && msg.sender != articlesWirer) revert NotArticlesIssuer(msg.sender);
+            _clearWirer();
         } else if (msg.sender != _executor()) {
             revert NotArticlesTimelock(msg.sender);
         }
         articlesGate = gate;
         emit ArticlesGateSet(gate);
+    }
+
+    function _clearWirer() private {
+        address wirer = articlesWirer;
+        if (wirer == address(0)) return;
+        articlesWirer = address(0);
+        emit ArticlesWirerCleared(wirer);
     }
 
     function quorum(uint256 timepoint) public view override(Governor, GovernorVotesQuorumFraction) returns (uint256) {

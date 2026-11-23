@@ -19,7 +19,7 @@ How the articles and a shareholder agreement can point at these contracts, which
 | `GvGovernor` | Token holders who have delegated. Settings change only through a proposal. |
 | `TimelockController` | Itself. The governor is proposer, executor, and canceller. The factory renounces the temporary admin it used to grant those roles. |
 | `GvDividend` | The timelock starts an epoch and, after the deadline, sweeps what was not claimed. Anyone can fund or submit a claim. Tokens are paid to the leaf account. |
-| `GvKitFactory` | Nobody. It stores the deployment and emits `IssuerKitDeployed`. It keeps no role. |
+| `GvKitFactory` | Nobody. `deploySet` stores the deployment and emits `IssuerKitDeployed` and `IssuerSetDeployed`. It keeps no role. |
 | `GvDirectory` | Optional. The issuer, or the timelock they stored, edits their own pointer. The kit does not read it. |
 | `GvCompanyRules` | The issuer. Transfer ownership to the timelock after counsel replaces the placeholders. |
 | `GvAssembly` | The issuer appoints directors. Shareholders convene when they meet the stored threshold. |
@@ -28,7 +28,9 @@ How the articles and a shareholder agreement can point at these contracts, which
 | `GvAcquisition` | No owner. A buyer posts an offer. A drag can force a transfer only after the timelock has set this contract as a share module, and only for the stored buyer. |
 | `GvRecovery` | A director proposes one delayed transfer with a document hash. The timelock can cancel it. |
 
-A meeting is still the governor. `GvAssembly` records whether it is an AGM or an EGM, the notice, the agenda, and the invitation hash. Anyone can read `propose`, `state`, `quorum`, the assembly, and the timelock from chain data. A directory entry is not required and is not proof that the factory deployed those addresses. The factory event is the deployment record. The new modules are not inside the factory. The issuer deploys them and the timelock wires the share token. They keep working if the directory is empty.
+A meeting is still the governor. `GvAssembly` records whether it is an AGM or an EGM, the notice, the agenda, and the invitation hash. Anyone can read `propose`, `state`, `quorum`, the assembly, and the timelock from chain data. A directory entry is not required and is not proof that the factory deployed those addresses. The factory events are the deployment record.
+
+`deploySet` creates the native share, the timelock, the governor, the dividend, and the six rule modules in one transaction. It points the governor at the assembly and the terms at the acquisition, then drops those one-time rights. It does not set the share token's transfer policy or share modules. The timelock sets those, after a vote. Wrap mode and an existing votes token stay on `deploy`, which leaves the modules unset. The pages under `docs/site/governance/` are the mirror for docs.investhub.org. See [docs/publishing.md](docs/publishing.md).
 
 ## What is deployed
 
@@ -39,10 +41,10 @@ Solidity 0.8.28, Foundry, OpenZeppelin Contracts v5.6.1 (the audited `v5.6.1` re
 3. **Governor.** OpenZeppelin `Governor`, `GovernorSettings`, `GovernorCountingSimple` (For / Against / Abstain), `GovernorVotes`, `GovernorVotesQuorumFraction`, and `GovernorTimelockControl`. This is the OpenZeppelin Contracts Wizard shape, which is what Tally indexes. Quorum counts For and Abstain. For must be strictly greater than Against. Delay, period, quorum numerator (percent), threshold, and timelock delay are constructor arguments.
 4. **Timelock.** OpenZeppelin `TimelockController`. The executor role is the governor contract, not the open role `address(0)`. There is no separate guardian.
 5. **Dividend.** One merkle epoch per distribution, in the Uniswap merkle-distributor pattern. The epoch is funded with an ERC-20 (USDC in the Base example). Claims are closed until the full allocation has been funded. A claim is one proof and one transfer, so a few thousand holders do not require a loop. Unclaimed tokens return only to a call from the timelock after the deadline.
-6. **Factory.** CREATE2 deployment of the four kit contracts. `IssuerKitDeployed(issuer, share, governor, timelock, dividend, metadataURI)`.
-7. **Directory.** Optional and ownerless.
+6. **Factory.** CREATE2 deployment. `deploy` creates the share or wrapper, the timelock, the governor, and the dividend. `deploySet` adds company rules, the assembly, the information record, share terms, acquisition, and recovery in that same transaction. Events: `IssuerKitDeployed` and, for a set, `IssuerSetDeployed`.
+7. **Directory.** Optional and ownerless. Not part of `deploySet`.
 
-The factory's constructor does not embed the other contracts. EIP-3860 limits initcode to 49,152 bytes, so the deployers are separate transactions. See the deploy guide.
+The factory's constructor does not embed the other contracts. EIP-3860 limits initcode to 49,152 bytes, so eleven deployer contracts are separate transactions, then the factory at nonce + 11. The forge scripts refuse every chain id except a local node and the public testnets listed in [docs/gv-without-investhub.md](docs/gv-without-investhub.md). See that guide.
 
 ## Votes are not the balance
 
@@ -80,27 +82,29 @@ Holder addresses in the tests come from `makeAddr` or from `address(uint160(0xA0
 
 Starting an epoch does not grow with the holder count. Claim gas stays in a band of under 20,000 from the first leaf to the last. A 5,000-leaf proof is about 13 hashes.
 
-Function averages from the same report, in gas: `propose` 72,228, `castVote` 83,170, `queue` 146,023, `execute` 187,522, `GvShare.delegate` 95,533, `GvDividend.fund` 122,817. `GvKitFactory.deploy` is dominated by creating the governor and the share. Those averages include the whole suite, not a single warm call.
+Function averages from an earlier report, in gas: `propose` 72,228, `castVote` 83,170, `queue` 146,023, `execute` 187,522, `GvShare.delegate` 95,533, `GvDividend.fund` 122,817. `GvKitFactory.deploy` is dominated by creating the governor and the share. Those averages include the whole suite, not a single warm call.
+
+A successful `GvKitFactory.deploySet` in `test/GvIssuerSet.t.sol`, Foundry 1.9.0, uses a gas-report median of 23,095,812 and a minimum of 23,075,888. The test asserts the successful call stays under 25,000,000. The report maximum is a salt-collision revert, which spends the remaining gas, and is not the cost of a deployment that lands. A local Anvil receipt for `script/DeployIssuerSet.s.sol` used 23,036,196 gas. Foundry's broadcast gas limit follows the script estimate (31,818,745 on that run), which is above Anvil's default 30,000,000 block gas limit, so start Anvil with `--gas-limit 40000000`. A chain that enforces the EIP-7825 cap of 16,777,216 gas per transaction cannot include `deploySet`. Re-measure with `forge test --gas-report` after any factory change.
 
 Runtime bytecode from `forge build --sizes` (EIP-170 limit 24,576, EIP-3860 initcode limit 49,152):
 
 | Contract | Runtime | Initcode |
 | --- | --- | --- |
-| `GvKitFactory` | 11,438 | 12,304 |
-| `GvGovernor` | 17,169 | 19,847 |
-| `GvGovernorDeployer` | 21,013 | 21,190 |
-| `GvShare` | 8,522 | 11,760 |
+| `GvKitFactory` | 17,835 | 19,430 |
+| `GvGovernor` | 18,207 | 20,885 |
+| `GvGovernorDeployer` | 22,051 | 22,228 |
+| `GvShare` | 8,523 | 11,762 |
 | `GvDividend` | 5,570 | 5,798 |
 | `GvDirectory` | 2,192 | 2,220 |
-| `GvCompanyRules` | 6,404 | 8,897 |
-| `GvAssembly` | 13,593 | 14,378 |
+| `GvCompanyRules` | 7,995 | 10,772 |
+| `GvAssembly` | 14,905 | 15,704 |
 | `GvInformation` | 5,987 | 6,236 |
-| `GvShareTerms` | 10,625 | 11,238 |
-| `GvAcquisition` | 14,579 | 15,281 |
-| `GvRecovery` | 4,823 | 5,291 |
-| `GvShareDeployer` | 12,893 | 13,070 |
+| `GvShareTerms` | 14,688 | 16,180 |
+| `GvAcquisition` | 17,325 | 18,055 |
+| `GvRecovery` | 5,170 | 5,645 |
+| `GvShareDeployer` | 12,895 | 13,072 |
 
-`GvShare` was 7,450 bytes before the optional transfer-policy hook. With the hook unset, a transfer does not call a policy. The gas averages above are from that earlier measurement. `GvGovernor` is unchanged. The new modules sit under the 24,576-byte runtime limit. Every default in `GvCompanyRules` is a placeholder a Liechtenstein lawyer has to replace. See [docs/legal-wrapper.md](docs/legal-wrapper.md).
+`GvShare` was 7,450 bytes before the optional transfer-policy hook. With the hook unset, a transfer does not call a policy. The function averages above are from an earlier measurement. `GvGovernor` grew when the articles gate was added; its runtime is 18,207 bytes, leaving 6,369 under the 24,576-byte limit. The largest deployer initcode is `GvGovernorDeployer` at 22,228 bytes. Every default in `GvCompanyRules` is a placeholder a Liechtenstein lawyer has to replace. See [docs/legal-wrapper.md](docs/legal-wrapper.md).
 
 ## Layout
 
@@ -118,9 +122,13 @@ src/GvShareTerms.sol
 src/GvAcquisition.sol
 src/GvRecovery.sol
 src/deployers/GvDeployers.sol
+src/deployers/GvModuleDeployers.sol
 script/DeployInfrastructure.s.sol
 script/DeployIssuerKit.s.sol
+script/DeployIssuerSet.s.sol
 script/DeployIssuerTerms.s.sol
+script/GvChainGuard.sol
+script/GvFactoryBootstrap.sol
 script/SimulateLifecycle.s.sol
 script/lifecycle/
 script/build_merkle.py
@@ -130,6 +138,8 @@ docs/gv-without-investhub.md
 docs/simulation.md
 docs/legal-wrapper.md
 docs/security.md
+docs/publishing.md
+docs/site/governance/
 docs/templates/
 ```
 
