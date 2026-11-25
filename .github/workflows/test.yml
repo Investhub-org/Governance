@@ -16,3 +16,15 @@ jobs:
           version: 1.9.0
       - name: forge test
         run: forge test
+
+  deadlines:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: lifecycle deadline tests
+        run: node --experimental-strip-types --test lifecycle/deadlines/test/deadlines.test.ts

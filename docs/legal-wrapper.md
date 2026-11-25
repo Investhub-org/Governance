@@ -132,5 +132,6 @@ Their README says some files (the `EIP7702` folder, interfaces, `ERC20Flaggable`
 13. The governor quorum and `articlesOutcome` are different checks. Which one do the articles adopt for an ordinary resolution, and which for a statute change?
 14. Undelegated shares do not show up in the governor's vote weights. Do the articles count them as absent?
 15. The Aktienbuch, tax, and stamp duty stay off-chain. Who writes the register entry after a transfer, a drag, or a recovery?
+16. The off-chain deadline engine in [lifecycle-deadlines.md](lifecycle-deadlines.md) has its own list of period questions. Those constants are not imported by these contracts. A plan is not a notice, a vote, or a payment.
 
 Draft clauses that name the addresses are in [templates/articles-draft.md](templates/articles-draft.md) and [templates/sha-draft.md](templates/sha-draft.md). They are drafts for a lawyer to rewrite.
