@@ -1,0 +1,12 @@
+{
+  "name": "governance-deadlines",
+  "private": true,
+  "type": "module",
+  "description": "Pure corporate-lifecycle deadline planner. Not legal advice. No network, no keys, no payments.",
+  "scripts": {
+    "test:deadlines": "node --experimental-strip-types --test lifecycle/deadlines/test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

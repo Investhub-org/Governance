@@ -1,0 +1,225 @@
+{
+  "name": "governance.plan_lifecycle_event",
+  "tier": "free",
+  "signs": false,
+  "transmits": false,
+  "description": "Plan one issuer lifecycle event into an ordered list of deadlines and unsigned notification payloads. Free read. Does not sign, send, or take payment. Not legal advice. A multi-issuer calendar is the unimplemented x402 tool governance.plan_lifecycle_calendar.",
+  "premium": {
+    "name": "governance.plan_lifecycle_calendar",
+    "tier": "x402",
+    "implemented": false,
+    "note": "Multi-issuer calendar. This module does not price it, does not take payment, and does not call a network. Where a paid company-law workflow is offered, it is via a licensed partner (in review)."
+  },
+  "inputSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["issuerId", "event"],
+    "properties": {
+      "issuerId": { "$ref": "#/$defs/slug" },
+      "event": { "$ref": "#/$defs/event" },
+      "articles": { "$ref": "#/$defs/articles" },
+      "sha": { "$ref": "#/$defs/sha" },
+      "calendar": { "$ref": "#/$defs/calendar" },
+      "holders": {
+        "type": "array",
+        "maxItems": 10000,
+        "items": { "$ref": "#/$defs/holder" }
+      },
+      "board": {
+        "type": "array",
+        "maxItems": 50,
+        "items": { "$ref": "#/$defs/address" }
+      },
+      "otherEvents": {
+        "type": "array",
+        "maxItems": 64,
+        "description": "Other events of this same issuer, used only to report overlaps. A multi-issuer calendar is the x402 tool and is not implemented.",
+        "items": { "$ref": "#/$defs/event" }
+      },
+      "asOf": { "$ref": "#/$defs/instant" }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "ok",
+      "tool",
+      "tier",
+      "signed",
+      "transmitted",
+      "disclaimer",
+      "issuerId",
+      "eventId",
+      "timeZone",
+      "deadlines",
+      "notifications",
+      "errors",
+      "warnings",
+      "overlaps",
+      "premium",
+      "planId"
+    ],
+    "properties": {
+      "ok": { "type": "boolean" },
+      "tool": { "const": "governance.plan_lifecycle_event" },
+      "tier": { "const": "free" },
+      "signed": { "const": false },
+      "transmitted": { "const": false },
+      "disclaimer": { "type": "string" },
+      "issuerId": { "type": ["string", "null"] },
+      "eventId": { "type": ["string", "null"] },
+      "timeZone": { "const": "Europe/Vaduz" },
+      "deadlines": { "type": "array", "items": { "$ref": "#/$defs/deadline" } },
+      "notifications": { "type": "array", "items": { "$ref": "#/$defs/notification" } },
+      "errors": { "type": "array" },
+      "warnings": { "type": "array" },
+      "overlaps": { "type": "array" },
+      "premium": { "$ref": "#/$defs/premium" },
+      "planId": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "address": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+    "section": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 .§/()_-]{0,79}$" },
+    "instant": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "seconds": { "type": "integer", "minimum": 0, "maximum": 31622400 },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "at"],
+      "properties": {
+        "id": { "$ref": "#/$defs/slug" },
+        "kind": {
+          "type": "string",
+          "enum": ["agm", "egm", "dividend", "capital_increase", "drag_along", "tag_along"]
+        },
+        "at": { "$ref": "#/$defs/instant" },
+        "classId": { "$ref": "#/$defs/slug" },
+        "financialYearEnd": { "$ref": "#/$defs/instant" }
+      }
+    },
+    "articles": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Articles-as-code periods. Second fields use the same durations GvCompanyRules stores: agmNoticeSeconds is noticePeriod(AGM), egmNoticeSeconds is noticePeriod(EGM), preEmptionWindowSeconds is preEmptionWindow, responseWindowSeconds is responseWindow. Omitted fields use the statutory default or a named software placeholder. Not legal advice.",
+      "properties": {
+        "agmNoticeSeconds": { "$ref": "#/$defs/seconds" },
+        "egmNoticeSeconds": { "$ref": "#/$defs/seconds" },
+        "preEmptionWindowSeconds": { "$ref": "#/$defs/seconds" },
+        "responseWindowSeconds": { "$ref": "#/$defs/seconds" },
+        "informationLeadSeconds": { "$ref": "#/$defs/seconds" },
+        "minutesPublicationSeconds": { "$ref": "#/$defs/seconds" },
+        "dividendRecordLeadSeconds": { "$ref": "#/$defs/seconds" },
+        "dividendClaimWindowSeconds": { "$ref": "#/$defs/seconds" },
+        "votingWindowSeconds": { "$ref": "#/$defs/seconds" },
+        "votingDelaySeconds": { "$ref": "#/$defs/seconds" },
+        "votingPeriodSeconds": { "$ref": "#/$defs/seconds" },
+        "recordLeadSeconds": { "$ref": "#/$defs/seconds" },
+        "eeaListed": { "type": "boolean" },
+        "electronicVotingOpen": { "type": "boolean" },
+        "counselPermitsShorterConveningNotice": { "type": "boolean" },
+        "shareForm": { "type": "string", "enum": ["registered", "bearer"] },
+        "noticeSection": { "$ref": "#/$defs/section" },
+        "informationSection": { "$ref": "#/$defs/section" },
+        "dividendSection": { "$ref": "#/$defs/section" },
+        "preEmptionSection": { "$ref": "#/$defs/section" },
+        "minutesSection": { "$ref": "#/$defs/section" },
+        "governorSection": { "$ref": "#/$defs/section" }
+      }
+    },
+    "sha": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Shareholder-agreement windows. Drag and tag deadlines are arguments to GvAcquisition, not GvCompanyRules periods. No PGR day count is applied.",
+      "properties": {
+        "dragResponseSeconds": { "$ref": "#/$defs/seconds" },
+        "tagResponseSeconds": { "$ref": "#/$defs/seconds" },
+        "dragSection": { "$ref": "#/$defs/section" },
+        "tagSection": { "$ref": "#/$defs/section" }
+      }
+    },
+    "calendar": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeZone": { "const": "Europe/Vaduz" },
+        "holidays": {
+          "type": "array",
+          "maxItems": 400,
+          "items": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" }
+        },
+        "useLiechtensteinPreset": { "type": "boolean" },
+        "convention": { "type": "string", "enum": ["none", "notice_earlier_window_later"] }
+      }
+    },
+    "holder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address"],
+      "properties": {
+        "address": { "$ref": "#/$defs/address" },
+        "classId": { "$ref": "#/$defs/slug" }
+      }
+    },
+    "deadline": {
+      "type": "object",
+      "required": [
+        "id",
+        "at",
+        "atMs",
+        "action",
+        "audiences",
+        "templateKey",
+        "latestSendAt",
+        "legalBasis",
+        "businessDayAdjustment",
+        "clock",
+        "onChain",
+        "due",
+        "rank"
+      ]
+    },
+    "legalBasis": {
+      "type": "object",
+      "required": ["source", "ref", "appliedSeconds", "appliedBecause", "placeholder", "note"],
+      "properties": {
+        "source": { "type": "string", "enum": ["statute", "articles", "sha"] }
+      }
+    },
+    "notification": {
+      "type": "object",
+      "required": [
+        "deadlineId",
+        "templateKey",
+        "audience",
+        "latestSendAt",
+        "signed",
+        "transmitted",
+        "channel",
+        "recipientTiming",
+        "recipients",
+        "payload"
+      ],
+      "properties": {
+        "signed": { "const": false },
+        "transmitted": { "const": false },
+        "channel": { "const": "simulated" }
+      }
+    },
+    "premium": {
+      "type": "object",
+      "required": ["name", "tier", "implemented", "note"],
+      "properties": {
+        "name": { "const": "governance.plan_lifecycle_calendar" },
+        "tier": { "const": "x402" },
+        "implemented": { "const": false }
+      }
+    }
+  }
+}

@@ -8,6 +8,8 @@ How to deploy and vote without the InvestHub UI: [docs/gv-without-investhub.md](
 
 How the articles and a shareholder agreement can point at these contracts, which numbers are placeholders rather than law, and why Aktionariat's contracts were not copied: [docs/legal-wrapper.md](docs/legal-wrapper.md). Draft clauses for a lawyer to rewrite: [docs/templates/articles-draft.md](docs/templates/articles-draft.md) and [docs/templates/sha-draft.md](docs/templates/sha-draft.md).
 
+An off-chain planner for notice, record, vote, dividend, pre-emption, and drag/tag dates: [docs/lifecycle-deadlines.md](docs/lifecycle-deadlines.md). It does not send, sign, or take payment. The day counts are defaults to verify with Liechtenstein counsel. They are not legal advice.
+
 ## Independence
 
 | Piece | Who controls it |
@@ -54,7 +56,10 @@ Build a dividend tree from share balances, not from delegated votes. For a wrapp
 forge install
 forge test
 forge test --gas-report
+node --experimental-strip-types --test lifecycle/deadlines/test/deadlines.test.ts
 ```
+
+The deadline test needs Node 22. It does not compile the contracts and it does not touch a network.
 
 `test/GvFork.t.sol` forks Base and runs propose, vote, queue, execute, fund, and claim. It runs only when `BASE_RPC_URL` is set to a Base RPC. Unset, the test is skipped. It does not broadcast. The fork funds the test contract with canonical Base USDC (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`, a token contract) when the client can write that balance, and otherwise uses a test ERC-20 on the fork.
 
@@ -123,8 +128,10 @@ script/build_merkle.py
 test/
 docs/gv-without-investhub.md
 docs/legal-wrapper.md
+docs/lifecycle-deadlines.md
 docs/security.md
 docs/templates/
+lifecycle/deadlines/
 ```
 
 OpenZeppelin and forge-std are git submodules under `lib/`, pinned in `.gitmodules` and `foundry.lock`.
